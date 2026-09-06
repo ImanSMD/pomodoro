@@ -1,0 +1,14 @@
+# Personal tracking data — don't commit your actual logged hours/tasks
+df_pomodoro.csv
+df_pomodoro_backup.csv
+df_pomodoro_agg.csv
+df_pomodoro_legacy_backup.csv
+
+# Python
+__pycache__/
+*.pyc
+
+# Virtual environments
+venv/
+.venv/
+env/

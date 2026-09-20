@@ -51,8 +51,9 @@ services:
       ACCESS_TOKEN_TTL_MINUTES: ${ACCESS_TOKEN_TTL_MINUTES:-15}
       REFRESH_TOKEN_TTL_DAYS: ${REFRESH_TOKEN_TTL_DAYS:-30}
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
-      # localhost only — see the comment in backend/app/main.py: the 127.0.0.1
-      # spelling is a different site and breaks the SameSite=Lax refresh cookie.
+      # localhost only — see DEFAULT_CORS_ORIGINS in backend/app/config.py: the
+      # 127.0.0.1 spelling is a different site and breaks the SameSite=Lax
+      # refresh cookie. Settings rejects a wildcard and validates origin shape.
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
       # See VITE_USE_POLLING on the web service — same escape hatch, same rule.
       WATCHFILES_FORCE_POLLING: ${WATCHFILES_FORCE_POLLING:-}

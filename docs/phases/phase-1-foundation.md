@@ -255,10 +255,10 @@ reports the database missing, `docker compose down -v` and bring it back up.
 - [x] `.env.example`, extend `.gitignore`
 
 **Database**
-- [ ] `config.py` settings, `db.py` async engine + `get_db`
-- [ ] `models/base.py` mixins (UUID pk, timestamps, soft delete)
-- [ ] Alembic wired to the async engine
-- [ ] Migration 0001 — citext + `users`
+- [x] `config.py` settings, `db.py` async engine + `get_db`
+- [x] `models/base.py` mixins (UUID pk, timestamps, soft delete)
+- [x] Alembic wired to the async engine
+- [x] Migration 0001 — citext + `users`
 
 **Auth**
 - [ ] `core/security.py` — argon2 + JWT encode/decode

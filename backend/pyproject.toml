@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pomodoro-api"
+version = "0.1.0"
+description = "Pomodoro tracker API"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "sqlalchemy[asyncio]>=2.0.36",
+    "asyncpg>=0.30",
+    "alembic>=1.14",
+    "pydantic-settings>=2.6",
+    "passlib[argon2]>=1.7.4",
+    "pyjwt>=2.10",
+    "python-multipart>=0.0.17",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "httpx>=0.28",
+    "asgi-lifespan>=2.1",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+# 1.7's conftest holds a real Postgres engine; the natural session-scoped
+# fixture fails with "Future attached to a different loop" under the
+# function-scoped default that pytest-asyncio 1.x ships.
+asyncio_default_fixture_loop_scope = "session"
+# Both are required. Setting only the fixture scope leaves TESTS on a
+# function-scoped loop, so a session-scoped engine and the test using it still
+# land in different loops — the exact failure this is meant to prevent.
+asyncio_default_test_loop_scope = "session"
+testpaths = ["tests"]
+
+[tool.setuptools.packages.find]
+include = ["app*"]

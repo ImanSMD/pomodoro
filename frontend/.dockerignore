@@ -1,0 +1,7 @@
+node_modules/
+dist/
+
+# Must never reach an image layer: Vite reads .env from this directory and
+# inlines every VITE_* value into the public JS bundle at build time.
+.env
+.env.*

@@ -1,0 +1,96 @@
+name: pomodoro
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-pomodoro}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pomodoro}
+      POSTGRES_DB: ${POSTGRES_DB:-pomodoro}
+      POSTGRES_TEST_DB: ${POSTGRES_TEST_DB:-pomodoro_test}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      # Loopback only — the dev credentials are well-known, so this must not be
+      # reachable from the rest of the network.
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      # -h 127.0.0.1 matters: during initdb the entrypoint runs a temporary
+      # server with listen_addresses='' that already answers on the unix
+      # socket. A socket check would go healthy mid-init and release `api`
+      # before the init scripts have run.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U ${POSTGRES_USER:-pomodoro} -d ${POSTGRES_DB:-pomodoro}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      # First boot runs initdb + the init scripts + a server restart, all of
+      # which this TCP check correctly reports as unhealthy. Without a
+      # start_period those attempts eat the ~50s retry budget and a cold
+      # machine fails the clean-volume rebuild with "dependency failed to
+      # start" instead of simply waiting.
+      start_period: 30s
+
+  api:
+    build: ./backend
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    # Root by default (what Docker Desktop's uid-mapped mounts expect). On
+    # Linux, files this container writes into the bind mount — .pytest_cache,
+    # and from 1.2 the generated alembic/versions/*.py — land root-owned and
+    # need sudo to edit. Set DOCKER_UID/DOCKER_GID to your own ids there:
+    #   DOCKER_UID=$(id -u) DOCKER_GID=$(id -g) docker compose up
+    user: "${DOCKER_UID:-0}:${DOCKER_GID:-0}"
+    # Defaults inline so a fresh clone runs with no .env at all; compose still
+    # auto-loads a root .env, so anything set there overrides these. The URLs
+    # are composed from the same POSTGRES_* vars the db service uses, so
+    # changing a password in one place cannot desync the two.
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://${POSTGRES_USER:-pomodoro}:${POSTGRES_PASSWORD:-pomodoro}@db:5432/${POSTGRES_DB:-pomodoro}}
+      TEST_DATABASE_URL: ${TEST_DATABASE_URL:-postgresql+asyncpg://${POSTGRES_USER:-pomodoro}:${POSTGRES_PASSWORD:-pomodoro}@db:5432/${POSTGRES_TEST_DB:-pomodoro_test}}
+      JWT_SECRET: ${JWT_SECRET:-dev-only-insecure-secret-change-me}
+      ACCESS_TOKEN_TTL_MINUTES: ${ACCESS_TOKEN_TTL_MINUTES:-15}
+      REFRESH_TOKEN_TTL_DAYS: ${REFRESH_TOKEN_TTL_DAYS:-30}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      # localhost only — see the comment in backend/app/main.py: the 127.0.0.1
+      # spelling is a different site and breaks the SameSite=Lax refresh cookie.
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+      # See VITE_USE_POLLING on the web service — same escape hatch, same rule.
+      WATCHFILES_FORCE_POLLING: ${WATCHFILES_FORCE_POLLING:-}
+    volumes:
+      - ./backend:/app
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  web:
+    build: ./frontend
+    command: npm run dev -- --host 0.0.0.0 --port 5173
+    # Same reasoning as api: this bind mount is where `docker compose exec web
+    # npm install <pkg>` writes package.json and package-lock.json back to the
+    # host checkout, root-owned on Linux without this.
+    user: "${DOCKER_UID:-0}:${DOCKER_GID:-0}"
+    environment:
+      VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
+      # A DOCKER_UID with no /etc/passwd entry gets HOME=/, so npm's cache
+      # resolves to /.npm and `exec web npm install <pkg>` fails with EACCES.
+      HOME: /tmp
+      # Escape hatch for hosts whose bind mounts don't forward file events.
+      # Pairs with WATCHFILES_FORCE_POLLING on api — set both or neither.
+      VITE_USE_POLLING: ${VITE_USE_POLLING:-}
+    volumes:
+      - ./frontend:/app
+      # Anonymous volume keeps the image's node_modules from being shadowed by
+      # the host bind mount (host installs are a different platform/arch).
+      # Trap: compose REUSES this volume when it recreates the container, so a
+      # newly added dependency won't appear after `up --build` alone — use
+      # `docker compose up --build --renew-anon-volumes` after changing deps.
+      - /app/node_modules
+    ports:
+      - "127.0.0.1:5173:5173"
+    depends_on:
+      - api
+
+volumes:
+  pgdata:

@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+
+# Must never reach an image layer — 1.2's Settings(env_file=".env") invites
+# this file to exist here, and .gitignore keeps it out of every future diff.
+.env
+.env.*

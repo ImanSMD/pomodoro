@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -77,18 +78,23 @@ async def engine(migrated_test_db: str) -> AsyncIterator[AsyncEngine]:
     await engine.dispose()
 
 
-@pytest.fixture
-async def db(engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
+@asynccontextmanager
+async def rolled_back_session(engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
     """A session inside an outer transaction that is always rolled back.
 
-    Not simply `session.rollback()` on teardown: from 1.3 the tests drive real
-    routes through get_db, which commit. A plain rollback after a commit is a
-    no-op, so rows would survive across tests and across pytest runs — a
-    "register → 201" test would pass once and 409 forever after, and a later
-    "duplicate email → 409" test would pass for the wrong reason.
+    Extracted from the `db` fixture so a test can exercise this exact code
+    rather than a copy of it.
 
-    join_transaction_mode="create_savepoint" turns each inner commit into a
-    savepoint release, so the outer rollback still undoes everything.
+    The outer transaction is the load-bearing part. A plain session on the
+    engine plus `rollback()` on teardown does nothing once the test has
+    committed — and from 1.3 the tests drive real routes through get_db, which
+    commit. Rows would then survive across tests and across pytest runs: a
+    "register -> 201" test would pass once and 409 forever after, and a later
+    "duplicate email -> 409" test would pass for the wrong reason.
+
+    join_transaction_mode is stated explicitly for the reader; SQLAlchemy's
+    default ("conditional_savepoint") already savepoints on a connection that
+    has an open transaction, so it is documentation rather than the mechanism.
     """
     async with engine.connect() as connection:
         transaction = await connection.begin()
@@ -102,6 +108,12 @@ async def db(engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
         finally:
             await session.close()
             await transaction.rollback()
+
+
+@pytest.fixture
+async def db(engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
+    async with rolled_back_session(engine) as session:
+        yield session
 
 
 @pytest.fixture

@@ -228,3 +228,33 @@ def test_unparseable_port_is_refused_with_the_shape_error(value: str):
     # otherwise surface as a raw "Port could not be cast to integer".
     with pytest.raises(ValidationError, match="not a bare origin"):
         make(cors_origins=value)
+
+
+@pytest.mark.parametrize("value", ["http://:5173", "https://:443"])
+def test_origin_with_no_host_is_refused(value: str):
+    # urlparse gives a truthy netloc but hostname None, and "".isascii() is
+    # True, so every shape clause missed this.
+    with pytest.raises(ValidationError, match="not a bare origin"):
+        make(cors_origins=value)
+
+
+def test_explicit_port_zero_is_refused():
+    # Port 0 parses cleanly, and the falsy check that strips default ports
+    # would then drop it — widening "http://example.com:0" to the whole origin.
+    with pytest.raises(ValidationError, match="not a bare origin"):
+        make(cors_origins="http://example.com:0")
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "http://127.1:8000",
+        "http://127.0.0.2:8000",
+        "https://[0:0:0:0:0:0:0:1]:8000",
+        "http://0.0.0.0:5173",
+    ],
+)
+def test_non_canonical_loopback_spellings_are_caught(value: str):
+    # A literal string set only caught the canonical spellings.
+    with pytest.raises(ValidationError, match="loopback origin"):
+        make(jwt_secret=REAL_SECRET, cors_origins=value)

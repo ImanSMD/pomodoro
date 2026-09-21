@@ -33,7 +33,13 @@ services:
 
   api:
     build: ./backend
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    # Migrations run here in DEV only. Production keeps them as an explicit
+    # step (see PLAN.md and phase 4) because multiple uvicorn workers booting
+    # at once would race. Without this, the exit gate's clean-volume rebuild
+    # leaves the dev database with no tables while /api/health and the startup
+    # probe both report healthy — the failure only shows up as a 500 on the
+    # first data route.
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
     # Root by default (what Docker Desktop's uid-mapped mounts expect). On
     # Linux, files this container writes into the bind mount — .pytest_cache,
     # and from 1.2 the generated alembic/versions/*.py — land root-owned and

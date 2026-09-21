@@ -22,7 +22,10 @@ COPY . .
 # anything importing `app` from outside /app (alembic autogenerate, say) would
 # silently read the snapshot instead of the live models. --no-deps keeps the
 # locked dependency layer above authoritative.
-RUN pip install --no-deps -e .
+# --no-build-isolation: PEP 517 would otherwise fetch setuptools from PyPI at
+# build time, unpinned, defeating the reproducibility the lockfile is for.
+# setuptools is pinned in requirements.lock and already installed above.
+RUN pip install --no-deps --no-build-isolation -e .
 
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

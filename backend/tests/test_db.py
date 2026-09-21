@@ -10,13 +10,14 @@ from starlette.testclient import TestClient
 from asgi_lifespan import LifespanManager
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.config import Settings
 from app.db import DbSession
 from sqlalchemy.exc import DBAPIError
 from app.main import create_app
 from app.models import User
+from tests.conftest import rolled_back_session
 
 
 async def test_session_executes_against_the_test_database(db: AsyncSession):
@@ -160,21 +161,20 @@ async def test_absurdly_long_email_is_rejected_by_the_database(db: AsyncSession)
         await db.flush()
 
 
-async def test_a_committed_row_does_not_leak_into_other_tests(db: AsyncSession):
-    """Paired with the test below.
+async def test_the_db_fixture_rolls_back_even_after_a_commit(engine: AsyncEngine):
+    """Exercises the db fixture's own helper, not a copy of it.
 
-    From 1.3 the tests drive routes that commit, and a teardown rollback after a
-    commit is a no-op — rows would survive across tests and across pytest runs.
+    Self-contained rather than a pair of ordered tests: a pair passes trivially
+    under -k, xdist or any shuffling plugin, which is to say it would report
+    green precisely when the isolation had regressed.
     """
-    db.add(User(email="committed@example.com", password_hash="x", display_name="C"))
-    await db.commit()
+    email = "committed@example.com"
 
-    assert await db.scalar(
-        select(User).where(User.email == "committed@example.com")
-    ) is not None
+    async with rolled_back_session(engine) as session:
+        session.add(User(email=email, password_hash="x", display_name="C"))
+        await session.commit()
+        assert await session.scalar(select(User).where(User.email == email))
 
-
-async def test_the_previous_commit_was_rolled_back(db: AsyncSession):
-    assert (
-        await db.scalar(select(User).where(User.email == "committed@example.com"))
-    ) is None
+    # A separate connection: the committed row must not have survived teardown.
+    async with engine.connect() as connection:
+        assert await connection.scalar(select(User.id).where(User.email == email)) is None

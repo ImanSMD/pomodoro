@@ -8,7 +8,9 @@ several settings together.
 
 from __future__ import annotations
 
+import ipaddress
 import logging
+import socket
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -32,12 +34,28 @@ DEV_JWT_SECRET = "dev-only-insecure-secret-change-me"
 DEFAULT_CORS_ORIGINS = "http://localhost:5173"
 
 
-_LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
-
-
 def _is_loopback(origin: str) -> bool:
+    """Loopback or unspecified, by value rather than by spelling.
+
+    A literal set of strings missed 0:0:0:0:0:0:0:1, 127.0.0.2 and 127.1, all
+    of which are loopback and all of which a deployed config must refuse.
+    """
     host = (urlparse(origin).hostname or "").lower()
-    return host in _LOOPBACK_HOSTS or host.endswith(".localhost")
+    if not host:
+        return False
+    if host == "localhost" or host.endswith(".localhost"):
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        try:
+            # inet_aton, because ipaddress rejects the shorthand forms the
+            # resolver accepts: "127.1" is 127.0.0.1 to a browser but a
+            # ValueError to ipaddress. A real hostname raises OSError here.
+            address = ipaddress.ip_address(socket.inet_aton(host))
+        except OSError:
+            return False
+    return address.is_loopback or address.is_unspecified
 
 
 class Settings(BaseSettings):
@@ -120,8 +138,11 @@ class Settings(BaseSettings):
                 or not parsed.netloc
                 or "@" in parsed.netloc  # userinfo never appears in an Origin header
                 or "*" in parsed.netloc  # no wildcard matching: Starlette compares exact strings
+                or not host  # "http://:5173" has a truthy netloc but no host
                 or not host.isascii()  # browsers send punycode, not unicode
-                or port == -1  # unparseable port
+                # -1 is the sentinel above; 0 parses cleanly but would then be
+                # dropped by the falsy check below, widening "host:0" to "host"
+                or port in {-1, 0}
                 or parsed.path
                 or parsed.query
                 or parsed.fragment

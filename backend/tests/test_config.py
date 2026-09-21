@@ -201,3 +201,30 @@ def test_short_jwt_secret_is_refused():
 def test_non_positive_token_ttls_are_refused(overrides):
     with pytest.raises(ValidationError):
         make(**overrides)
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("https://[::1]:8000", "https://[::1]:8000"),
+        ("http://[2001:db8::1]", "http://[2001:db8::1]"),
+        ("https://[2001:DB8::1]:443", "https://[2001:db8::1]"),
+    ],
+)
+def test_ipv6_origins_keep_their_brackets(value: str, expected: str):
+    # urlparse strips the brackets from .hostname, and a browser sends them —
+    # so the unbracketed form matches nothing AND slips past the loopback guard.
+    assert make(cors_origins=value).allowed_origins == [expected]
+
+
+def test_ipv6_loopback_is_caught_on_a_deployed_config():
+    with pytest.raises(ValidationError, match="loopback origin"):
+        make(jwt_secret=REAL_SECRET, cors_origins="https://[::1]:8000")
+
+
+@pytest.mark.parametrize("value", ["https://h:abc", "https://h:99999"])
+def test_unparseable_port_is_refused_with_the_shape_error(value: str):
+    # urlparse defers port validation to attribute access, so this would
+    # otherwise surface as a raw "Port could not be cast to integer".
+    with pytest.raises(ValidationError, match="not a bare origin"):
+        make(cors_origins=value)

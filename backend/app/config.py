@@ -108,12 +108,20 @@ class Settings(BaseSettings):
                 continue
             parsed = urlparse(origin)
             host = parsed.hostname or ""
+            try:
+                port = parsed.port
+            except ValueError:
+                # urlparse defers port validation to attribute access, so a
+                # non-numeric or out-of-range port raises here rather than
+                # failing the shape check below.
+                port = -1
             if (
                 parsed.scheme not in {"http", "https"}
                 or not parsed.netloc
                 or "@" in parsed.netloc  # userinfo never appears in an Origin header
                 or "*" in parsed.netloc  # no wildcard matching: Starlette compares exact strings
                 or not host.isascii()  # browsers send punycode, not unicode
+                or port == -1  # unparseable port
                 or parsed.path
                 or parsed.query
                 or parsed.fragment
@@ -134,12 +142,15 @@ class Settings(BaseSettings):
             scheme = parsed.scheme.lower()
             # A browser omits the default port from Origin, so keeping it here
             # would mean the entry never matches.
-            port = parsed.port
             if (scheme, port) in {("http", 80), ("https", 443)}:
                 port = None
             # Lowercased because the comparison is case-sensitive and browsers
-            # always send scheme and host in lower case.
-            netloc = host.lower() + (f":{port}" if port else "")
+            # always send scheme and host in lower case. urlparse strips the
+            # brackets from an IPv6 literal, so they have to be put back — a
+            # browser sends "https://[::1]:8000", and the unbracketed form
+            # would match nothing (and would slip past the loopback guard).
+            display_host = f"[{host}]" if ":" in host else host.lower()
+            netloc = display_host + (f":{port}" if port else "")
             normalised.append(f"{scheme}://{netloc}")
 
         origins = normalised

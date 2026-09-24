@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
-from app.api.routes import auth, settings as settings_routes
+from app.api.routes import auth, categories, settings as settings_routes, tasks
 from app.config import Settings, get_settings
 from app.core.cookies import RefreshTokenInvalid, clear_refresh_cookie
 from app.db import create_engine, create_session_factory
@@ -83,6 +83,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(auth.router)
     app.include_router(settings_routes.router)
+    app.include_router(categories.router)
+    app.include_router(tasks.router)
 
     return app
 

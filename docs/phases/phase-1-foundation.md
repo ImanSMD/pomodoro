@@ -185,9 +185,14 @@ GET   /api/sessions?task_id=&limit=                 → history list
 WS    /ws?token=<access>
 ```
 
-On `start`, resolve the effort as `task.work_minutes ?? user.default_work_minutes` and **freeze it**
-into `sessions.planned_minutes`. Later settings changes must never retroactively rewrite what a past
+On `start`, take the effort from `user.default_work_minutes` and **freeze it** into
+`sessions.planned_minutes`. Later settings changes must never retroactively rewrite what a past
 session was.
+
+Note there is no per-task override to consult yet: `tasks.work_minutes` and its siblings arrive with
+phase 2's migration 0007, so resolving `task.work_minutes ?? user.default_work_minutes` here would
+mean pulling that work forward. Phase 2 adds the fallback to the same frozen value, in
+`core/settings.py`.
 
 Catch `IntegrityError` from the partial index and return 409 carrying the already-running session.
 Do not pre-check with a `SELECT` — two rapid clicks interleave between the read and the write, and
@@ -202,6 +207,12 @@ replicas need Redis pub/sub.**
 ---
 
 ## 1.6 Frontend
+
+**Category name resolution.** A task may reference an archived category — archiving is reversible
+and keeping the grouping is its entire purpose, so unlike delete (which detaches) the link survives.
+The sidebar must therefore load `GET /api/categories?include_archived=true`, render archived ones
+muted, and offer only live ones in the picker. Loading the default list alone leaves the client with
+`category_id`s it cannot name.
 
 **Open the app at `http://localhost:5173`, not `http://127.0.0.1:5173`.** They are different sites
 to the browser, so the 127.0.0.1 spelling makes cross-site calls to `localhost:8000` and the
@@ -289,16 +300,16 @@ reports the database missing, `docker compose down -v` and bring it back up.
 - [x] `GET`/`PATCH /api/settings`
 
 **Categories & Tasks**
-- [ ] Migration 0003 — `categories`, `tasks`, partial unique name index
-- [ ] `scoped()` helper — the single path all reads go through
-- [ ] Categories CRUD + archive/restore
-- [ ] Tasks CRUD + archive/restore/complete + reorder
-- [ ] 404 (not 403) on missing-or-other-user rows
+- [x] Migration 0003 — `categories`, `tasks`, partial unique name index
+- [x] `scoped()` helper — the single path all reads go through
+- [x] Categories CRUD + archive/restore
+- [x] Tasks CRUD + archive/restore/complete + reorder
+- [x] 404 (not 403) on missing-or-other-user rows
 
 **Sessions & WebSocket**
 - [ ] Migration 0004 — `sessions` + `one_running_session_per_user` partial index
 - [ ] start (409 via `IntegrityError`, no pre-check SELECT) / active / complete / cancel / fix-end
-- [ ] Freeze `planned_minutes` at start from task → user fallback
+- [ ] Freeze `planned_minutes` at start from `user.default_work_minutes` (the per-task override is phase 2)
 - [ ] `ws/manager.py` + `/ws` route with query-token auth
 - [ ] Broadcast started / completed / cancelled
 

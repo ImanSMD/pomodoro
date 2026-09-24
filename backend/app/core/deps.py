@@ -6,17 +6,30 @@ and CurrentUser is the annotation that makes using it hard to forget.
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Any, Protocol, TypeVar
+from uuid import UUID
 
 import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy import select
+from sqlalchemy import Select, select
+from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import HTTPConnection
 
 from app.core.security import decode_access_token
 from app.db import DbSession
 from app.models import User
+
+
+class _Owned(Protocol):
+    """Structural type for a row a user owns and can soft-delete."""
+
+    id: Any
+    user_id: Any
+    deleted_at: Any
+
+
+OwnedModel = TypeVar("OwnedModel", bound=_Owned)
 
 # auto_error=False so a missing header produces our own 401 with a
 # WWW-Authenticate challenge, rather than FastAPI's bare 403.
@@ -64,3 +77,32 @@ async def get_current_user(
 
 
 CurrentUser = Annotated[User, Depends(get_current_user)]
+
+
+def scoped(stmt: Select[Any], model: type[OwnedModel], user: User) -> Select[Any]:
+    """Restrict a statement to one user's live rows.
+
+    Every read of an owned table goes through this. Two predicates, both easy
+    to forget individually and serious when forgotten: without `user_id ==`
+    one account reads another's data, and without the deleted_at check a
+    soft-deleted row comes back from the dead.
+
+    Cover it with the cross-user test rather than relying on discipline — the
+    failure is silent in both directions.
+    """
+    return stmt.where(model.user_id == user.id, model.deleted_at.is_(None))
+
+
+async def get_owned_or_404(
+    db: AsyncSession, model: type[OwnedModel], obj_id: UUID, user: User
+) -> OwnedModel:
+    """Fetch one row the caller owns, or 404.
+
+    404 and not 403, deliberately: a 403 confirms that the id exists, which
+    turns any detail endpoint into an oracle for enumerating other people's
+    rows.
+    """
+    obj = await db.scalar(scoped(select(model), model, user).where(model.id == obj_id))
+    if obj is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    return obj

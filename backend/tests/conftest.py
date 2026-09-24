@@ -204,3 +204,20 @@ async def real_db_client(
                 async with engine.begin() as connection:
                     # refresh_tokens goes with it via ON DELETE CASCADE.
                     await connection.execute(text("TRUNCATE users CASCADE"))
+
+
+@pytest.fixture
+async def second_user_token(
+    client: httpx.AsyncClient, register_payload: dict[str, str]
+) -> str:
+    """A second account, for proving one user cannot reach another's rows."""
+    response = await client.post(
+        "/api/auth/register",
+        json={
+            **register_payload,
+            "email": "grace@example.com",
+            "display_name": "Grace",
+        },
+    )
+    assert response.status_code == 201, response.text
+    return response.json()["access_token"]

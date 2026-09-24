@@ -217,6 +217,19 @@ class Settings(BaseSettings):
                     "front-end origin."
                 )
 
+        # Last, so a misconfigured CORS setup still reports its own error
+        # first. Symmetric with the dev-secret guard above: that refuses a
+        # placeholder secret with Secure cookies, this refuses a real secret
+        # without them. The refresh cookie is a 30-day credential, and without
+        # Secure the browser attaches it to plain http:// requests.
+        if self.looks_deployed and not self.cookie_secure:
+            raise ValueError(
+                "COOKIE_SECURE must be on for a deployed configuration "
+                "(a real JWT_SECRET is set). The refresh cookie is a "
+                f"{self.refresh_token_ttl_days}-day credential and would "
+                "otherwise be transmitted in clear text."
+            )
+
         self._allowed_origins = origins
         return self
 

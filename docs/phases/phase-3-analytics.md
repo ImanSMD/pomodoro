@@ -142,7 +142,7 @@ Fixtures outside it pass with or without the bug.
 ## Todo
 
 **Backend**
-- [ ] Migration 0008 — analytics indexes on `sessions`
+- [ ] Migration 0009 — analytics indexes on `sessions`
 - [ ] `local_day` bucketing helper — written once, used by all endpoints
 - [ ] `/analytics/summary` (by_day, by_category, by_task)
 - [ ] `/analytics/heatmap` with Jalali-year bound resolution

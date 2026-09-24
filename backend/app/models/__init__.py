@@ -6,6 +6,14 @@ missing from migrations.
 """
 
 from app.models.base import Base, SoftDelete, Timestamps, UUIDPrimaryKey
+from app.models.refresh_token import RefreshToken
 from app.models.user import User
 
-__all__ = ["Base", "SoftDelete", "Timestamps", "UUIDPrimaryKey", "User"]
+__all__ = [
+    "Base",
+    "RefreshToken",
+    "SoftDelete",
+    "Timestamps",
+    "UUIDPrimaryKey",
+    "User",
+]

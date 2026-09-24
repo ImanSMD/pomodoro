@@ -11,7 +11,7 @@ breaks and tells you when it's done — and it runs behind nginx from production
 
 ## 4.1 Goals
 
-**Migration 0009** — `goals (id, user_id, scope 'daily'|'weekly'|'monthly', target_minutes,
+**Migration 0010** — `goals (id, user_id, scope 'daily'|'weekly'|'monthly', target_minutes,
 category_id NULL, task_id NULL, active, …)`.
 
 A goal scoped to a category or task counts only sessions under it; both null means all focus time.
@@ -72,6 +72,10 @@ Keep `document.title` as the always-visible fallback, since permission may be de
 **`backend/Dockerfile`** — multi-stage: build wheels, then copy into `python:3.12-slim`. Non-root
 user, `uvicorn` with `--workers`, no `--reload`.
 
+**Do not bump the base image past 3.12 without replacing passlib.** `passlib` 1.7.4 imports the
+stdlib `crypt` module, which 3.13 removed — the image would fail at import, not at test time.
+Replacing it with `argon2-cffi` directly (already an installed dependency) is the smaller change.
+
 **`frontend/Dockerfile`** — `npm ci && npm run build`, then `nginx:alpine` serving `/usr/share/nginx/html`.
 
 **`frontend/nginx.conf`**
@@ -85,7 +89,14 @@ user, `uvicorn` with `--workers`, no `--reload`.
 **`compose.prod.yaml`** — no bind mounts, no reload, secrets from the environment, restart policies,
 healthchecks on all three services, Postgres on a named volume with no published port.
 
-Generate `JWT_SECRET` properly (`openssl rand -hex 32`) and set `Secure` on the refresh cookie.
+Generate `JWT_SECRET` properly (`openssl rand -hex 32`) and set `COOKIE_SECURE=true` — `Settings`
+now refuses to boot a deployed config without it.
+
+**Rate-limit `/api/auth/login`.** Section 1.3 deliberately runs argon2 even for unknown addresses,
+to close a timing oracle that leaked which emails are registered (measured at 50x before the fix).
+The cost of that is that every anonymous login attempt buys ~50–100 ms of CPU, so an unauthenticated
+flood saturates the API. A per-IP limiter at the proxy, or `slowapi` in front of the route, closes
+it; nothing in phases 1–3 does.
 Run migrations as an explicit step (`docker compose run --rm api alembic upgrade head`), not on
 app startup — startup migrations race when more than one worker boots.
 
@@ -123,7 +134,7 @@ same trap as an ungitignored CSV.
 ## Todo
 
 **Goals**
-- [ ] Migration 0009 — `goals`
+- [ ] Migration 0010 — `goals`
 - [ ] Period-bounds helper `(scope, date, calendar_pref, tz) → UTC range`, using `jdatetime`
 - [ ] Goals CRUD
 - [ ] `/goals/progress` with category/task scoping

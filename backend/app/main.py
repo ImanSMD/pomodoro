@@ -3,11 +3,14 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
+from app.api.routes import auth, settings as settings_routes
 from app.config import Settings, get_settings
+from app.core.cookies import RefreshTokenInvalid, clear_refresh_cookie
 from app.db import create_engine, create_session_factory
 
 
@@ -59,6 +62,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/health")
     async def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.exception_handler(RefreshTokenInvalid)
+    async def _refresh_token_invalid(
+        request: Request, exc: RefreshTokenInvalid
+    ) -> JSONResponse:
+        """Clear the cookie on the response the client actually receives.
+
+        Doing it on the route's injected Response and then raising is a no-op:
+        those headers are merged only on the non-exception path. Without this
+        the browser keeps a dead 30-day cookie, resends it on every refresh,
+        and never reaches a clean logged-out state.
+        """
+        response = JSONResponse(
+            status_code=401, content={"detail": "Invalid refresh token"}
+        )
+        if exc.clear_cookie:
+            clear_refresh_cookie(response, request.app.state.settings)
+        return response
+
+    app.include_router(auth.router)
+    app.include_router(settings_routes.router)
 
     return app
 

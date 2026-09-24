@@ -12,9 +12,11 @@ services:
       - pgdata:/var/lib/postgresql/data
       - ./db/init:/docker-entrypoint-initdb.d:ro
     ports:
+      # Host ports are configurable so this project can coexist with anything
+      # else already bound locally; the container-side ports never change.
       # Loopback only — the dev credentials are well-known, so this must not be
       # reachable from the rest of the network.
-      - "127.0.0.1:5432:5432"
+      - "127.0.0.1:${DB_PORT:-5432}:5432"
     healthcheck:
       # -h 127.0.0.1 matters: during initdb the entrypoint runs a temporary
       # server with listen_addresses='' that already answers on the unix
@@ -60,13 +62,13 @@ services:
       # localhost only — see DEFAULT_CORS_ORIGINS in backend/app/config.py: the
       # 127.0.0.1 spelling is a different site and breaks the SameSite=Lax
       # refresh cookie. Settings rejects a wildcard and validates origin shape.
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:${WEB_PORT:-5173}}
       # See VITE_USE_POLLING on the web service — same escape hatch, same rule.
       WATCHFILES_FORCE_POLLING: ${WATCHFILES_FORCE_POLLING:-}
     volumes:
       - ./backend:/app
     ports:
-      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:${API_PORT:-8000}:8000"
     depends_on:
       db:
         condition: service_healthy
@@ -79,7 +81,7 @@ services:
     # host checkout, root-owned on Linux without this.
     user: "${DOCKER_UID:-0}:${DOCKER_GID:-0}"
     environment:
-      VITE_API_URL: ${VITE_API_URL:-http://localhost:8000}
+      VITE_API_URL: ${VITE_API_URL:-http://localhost:${API_PORT:-8000}}
       # A DOCKER_UID with no /etc/passwd entry gets HOME=/, so npm's cache
       # resolves to /.npm and `exec web npm install <pkg>` fails with EACCES.
       HOME: /tmp
@@ -95,7 +97,7 @@ services:
       # `docker compose up --build --renew-anon-volumes` after changing deps.
       - /app/node_modules
     ports:
-      - "127.0.0.1:5173:5173"
+      - "127.0.0.1:${WEB_PORT:-5173}:5173"
     depends_on:
       - api
 

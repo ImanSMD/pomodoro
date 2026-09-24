@@ -13,7 +13,7 @@ Depends on Phase 1's `scoped()` helper and `CurrentUser` dependency; all new end
 
 ## 2.1 Todos (checklist inside a task)
 
-**Migration 0004** — `todos (id, user_id, task_id → tasks, text, done, done_at, position, …)`.
+**Migration 0005** — `todos (id, user_id, task_id → tasks, text, done, done_at, position, …)`.
 
 ```
 GET    /api/tasks/{task_id}/todos
@@ -35,7 +35,7 @@ exactly, or a stale client can silently drop rows.
 
 ## 2.2 Tags
 
-**Migration 0005** — `tags (id, user_id, name, color)` + `task_tags (task_id, tag_id)` composite PK,
+**Migration 0006** — `tags (id, user_id, name, color)` + `task_tags (task_id, tag_id)` composite PK,
 and `UNIQUE (user_id, lower(name)) WHERE deleted_at IS NULL`.
 
 ```
@@ -51,7 +51,7 @@ add-one/remove-one race where two open tabs each think they know the final tag l
 
 ## 2.3 Per-task timer settings
 
-**Migration 0006** — add nullable `work_minutes`, `break_minutes`, `long_break_minutes`,
+**Migration 0007** — add nullable `work_minutes`, `break_minutes`, `long_break_minutes`,
 `rounds_before_long_break` to `tasks`. **Nullable means inherit** — never copy the user default into
 the task at creation, or changing your global default later mysteriously fails to affect tasks you
 already made.
@@ -69,7 +69,7 @@ resolves through the same helper — extract it to `app/core/settings.py` and ca
 
 ## 2.4 History / audit log
 
-**Migration 0007** — `events (id, user_id, entity_type, entity_id, action, payload jsonb, created_at)`
+**Migration 0008** — `events (id, user_id, entity_type, entity_id, action, payload jsonb, created_at)`
 with an index on `(user_id, entity_type, entity_id, created_at DESC)`.
 
 `app/core/audit.py`:
@@ -133,24 +133,24 @@ Never put `password_hash` or tokens in `payload` — add an explicit field denyl
 ## Todo
 
 **Todos**
-- [ ] Migration 0004 — `todos` (with denormalised `user_id`)
+- [ ] Migration 0005 — `todos` (with denormalised `user_id`)
 - [ ] CRUD endpoints + `done_at` handling
 - [ ] Reorder endpoint with id-set validation
 - [ ] Checklist UI with optimistic toggle + drag reorder
 
 **Tags**
-- [ ] Migration 0005 — `tags` + `task_tags` + per-user unique name
+- [ ] Migration 0006 — `tags` + `task_tags` + per-user unique name
 - [ ] Tag CRUD, `PUT /tasks/{id}/tags`, AND-filtering on task list
 - [ ] Tag combobox with create-on-type; chips on task cards
 
 **Per-task settings**
-- [ ] Migration 0006 — nullable override columns on `tasks`
+- [ ] Migration 0007 — nullable override columns on `tasks`
 - [ ] Extract `core/settings.py` resolver; call from session start *and* the new endpoint
 - [ ] `GET /tasks/{id}/effective-settings` with `source` map
 - [ ] Settings panel showing inherited vs overridden
 
 **History**
-- [ ] Migration 0007 — `events` + composite index
+- [ ] Migration 0008 — `events` + composite index
 - [ ] `core/audit.py` `write_event` with field denylist
 - [ ] Wire into every mutation, same transaction
 - [ ] Diff payloads on update

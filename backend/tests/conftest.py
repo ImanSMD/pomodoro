@@ -17,11 +17,15 @@ from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
 from pathlib import Path
 
+import httpx
 import pytest
+from asgi_lifespan import LifespanManager
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from app.config import Settings, get_settings
-from app.db import create_engine
+from app.db import create_engine, get_db
+from app.main import create_app
 
 BACKEND_ROOT = Path(__file__).resolve().parent.parent
 
@@ -129,3 +133,74 @@ def test_settings(settings: Settings, test_database_url: str) -> Settings:
     old allowlist while the raw field read as the new value.
     """
     return Settings(**{**settings.model_dump(), "database_url": test_database_url})
+
+
+@pytest.fixture
+async def client(
+    test_settings: Settings, migrated_test_db: str, engine: AsyncEngine
+) -> AsyncIterator[httpx.AsyncClient]:
+    """An HTTP client whose app shares this test's rolled-back session.
+
+    get_db is overridden so routes commit into the same outer transaction the
+    db fixture opened — otherwise a route's commit would be real and would
+    outlive the test.
+    """
+    app = create_app(test_settings)
+
+    async with rolled_back_session(engine) as session:
+        app.dependency_overrides[get_db] = lambda: session
+        async with LifespanManager(app) as manager:
+            transport = httpx.ASGITransport(app=manager.app)
+            async with httpx.AsyncClient(
+                transport=transport, base_url="http://test"
+            ) as http_client:
+                http_client.session = session  # type: ignore[attr-defined]
+                yield http_client
+
+
+@pytest.fixture
+def register_payload() -> dict[str, str]:
+    return {
+        "email": "ada@example.com",
+        "password": "correct-horse-battery",
+        "display_name": "Ada",
+    }
+
+
+@pytest.fixture
+async def authed_client(
+    client: httpx.AsyncClient, register_payload: dict[str, str]
+) -> httpx.AsyncClient:
+    response = await client.post("/api/auth/register", json=register_payload)
+    assert response.status_code == 201, response.text
+    client.headers["Authorization"] = f"Bearer {response.json()['access_token']}"
+    return client
+
+
+@pytest.fixture
+async def real_db_client(
+    test_settings: Settings, migrated_test_db: str, engine: AsyncEngine
+) -> AsyncIterator[httpx.AsyncClient]:
+    """A client whose requests each get their OWN session and connection.
+
+    The `client` fixture shares one session across every request so the outer
+    transaction can roll everything back. That makes genuine concurrency
+    untestable: SELECT ... FOR UPDATE never blocks against its own
+    transaction, and asyncio.gather on a shared AsyncSession raises rather
+    than running in parallel.
+
+    Commits here are real, so this fixture truncates what it created on the
+    way out.
+    """
+    app = create_app(test_settings)
+    async with LifespanManager(app) as manager:
+        transport = httpx.ASGITransport(app=manager.app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as http_client:
+            try:
+                yield http_client
+            finally:
+                async with engine.begin() as connection:
+                    # refresh_tokens goes with it via ON DELETE CASCADE.
+                    await connection.execute(text("TRUNCATE users CASCADE"))

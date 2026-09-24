@@ -258,3 +258,26 @@ def test_non_canonical_loopback_spellings_are_caught(value: str):
     # A literal string set only caught the canonical spellings.
     with pytest.raises(ValidationError, match="loopback origin"):
         make(jwt_secret=REAL_SECRET, cors_origins=value)
+
+
+def test_a_deployed_config_must_use_secure_cookies():
+    """Symmetric with the dev-secret guard.
+
+    That one refuses a placeholder secret WITH Secure cookies; this refuses a
+    real secret WITHOUT them. The refresh cookie is a 30-day credential, and
+    without Secure the browser attaches it to plain http:// requests, where
+    anyone on the network path can take it.
+    """
+    with pytest.raises(ValidationError, match="COOKIE_SECURE must be on"):
+        make(jwt_secret=REAL_SECRET, cookie_secure=False)
+
+
+def test_a_deployed_config_with_secure_cookies_is_accepted():
+    settings = make(jwt_secret=REAL_SECRET, cookie_secure=True)
+    assert settings.cookie_secure is True
+
+
+def test_a_dev_config_does_not_require_secure_cookies():
+    # Local development is served over http, where Secure cookies would never
+    # be sent at all.
+    assert make(cookie_secure=False).allowed_origins == ["https://app.example.com"]

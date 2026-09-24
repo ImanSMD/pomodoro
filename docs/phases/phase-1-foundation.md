@@ -84,6 +84,12 @@ users   id, email CITEXT UNIQUE NOT NULL, password_hash, display_name,
 
 ## 1.3 Auth
 
+**Migration 0002** — `refresh_tokens (id, user_id → users ON DELETE CASCADE, token_hash unique,
+expires_at, revoked_at)`. Rotation needs server-side state: without a record of what was issued
+there is no way to invalidate the previous token when a new one is handed out. Only the SHA-256 of
+the token is stored, so a leaked row cannot be replayed. (This was not in the original plan, which
+numbered categories/tasks as 0002 — those are now 0003.)
+
 `app/core/security.py` — argon2 `hash_password` / `verify_password`, `create_access_token`,
 `create_refresh_token`, `decode_token`.
 
@@ -100,7 +106,21 @@ GET  /api/settings  ·  PATCH /api/settings                → timezone, calenda
 ```
 
 **Token handling.** Refresh token in an `httpOnly`, `SameSite=Lax`, `Secure`-in-prod cookie; access
-token held in React memory only. Do not put either in `localStorage` — anything that lands there is
+token held in React memory only.
+
+**Access tokens are not revocable, deliberately.** Logout and reuse detection end the refresh
+chain, but an access token already issued stays valid until it expires — so a thief who has just
+exchanged a stolen cookie keeps API access for up to `ACCESS_TOKEN_TTL_MINUTES`. That 15-minute
+window *is* the reason the TTL is short, and closing it properly means a `tokens_valid_after`
+column on `users` compared against the token's `iat` on every request. `get_current_user` already
+loads the user, so the cost is a column rather than a query — worth doing if the TTL ever grows,
+and not worth a migration at 15 minutes. The comments in `auth.py` must not claim otherwise.
+
+**Reuse detection has a grace window.** A replay within `REFRESH_REUSE_GRACE` of the rotation is
+treated as a duplicate rather than a theft. Two tabs restoring at once, React StrictMode, or a
+proxy retrying a timed-out POST all send the cookie a sibling request just spent; revoking the
+family there would kill the successor that sibling issued, leaving the browser holding a dead
+cookie and the user hard-logged-out for doing nothing wrong. Do not put either in `localStorage` — anything that lands there is
 readable by any XSS on the page, and a 30-day refresh token is the worst possible thing to leak.
 Rotate the refresh token on every use.
 
@@ -111,7 +131,7 @@ endpoint can't be used to enumerate which emails are registered.
 
 ## 1.4 Categories and Tasks
 
-**Migration 0002** — `categories` and `tasks` per the schema in `PLAN.md`, including
+**Migration 0003** — `categories` and `tasks` per the schema in `PLAN.md`, including
 `CREATE UNIQUE INDEX ... ON categories (user_id, lower(name)) WHERE deleted_at IS NULL`.
 
 **The scoping helper is the most important piece of this section.** Write it once:
@@ -146,7 +166,7 @@ A missing or other-user row returns **404, never 403** — a 403 confirms the id
 
 ## 1.5 Sessions and the WebSocket
 
-**Migration 0003** — `sessions`, plus the constraint this whole design leans on:
+**Migration 0004** — `sessions`, plus the constraint this whole design leans on:
 
 ```python
 op.execute("""
@@ -236,7 +256,7 @@ reports the database missing, `docker compose down -v` and bring it back up.
 ## Definition of done
 
 - [ ] `docker compose up --build` brings up db + api + web from a clean volume
-- [ ] `alembic upgrade head` applies 0001–0003 cleanly
+- [ ] `alembic upgrade head` applies 0001–0004 cleanly
 - [ ] Register → create category → create task → start timer
 - [ ] **Hard-refresh mid-session:** countdown resumes at the correct second
 - [ ] **Second tab:** completing in one updates the other within a second
@@ -261,21 +281,22 @@ reports the database missing, `docker compose down -v` and bring it back up.
 - [x] Migration 0001 — citext + `users`
 
 **Auth**
-- [ ] `core/security.py` — argon2 + JWT encode/decode
-- [ ] `core/deps.py` — `get_current_user`, `CurrentUser`
-- [ ] register / login / refresh / logout / me
-- [ ] refresh-token cookie (httpOnly, SameSite=Lax, rotate on use)
-- [ ] `GET`/`PATCH /api/settings`
+- [x] Migration 0002 — `refresh_tokens`
+- [x] `core/security.py` — argon2 + JWT encode/decode
+- [x] `core/deps.py` — `get_current_user`, `CurrentUser`
+- [x] register / login / refresh / logout / me
+- [x] refresh-token cookie (httpOnly, SameSite=Lax, rotate on use)
+- [x] `GET`/`PATCH /api/settings`
 
 **Categories & Tasks**
-- [ ] Migration 0002 — `categories`, `tasks`, partial unique name index
+- [ ] Migration 0003 — `categories`, `tasks`, partial unique name index
 - [ ] `scoped()` helper — the single path all reads go through
 - [ ] Categories CRUD + archive/restore
 - [ ] Tasks CRUD + archive/restore/complete + reorder
 - [ ] 404 (not 403) on missing-or-other-user rows
 
 **Sessions & WebSocket**
-- [ ] Migration 0003 — `sessions` + `one_running_session_per_user` partial index
+- [ ] Migration 0004 — `sessions` + `one_running_session_per_user` partial index
 - [ ] start (409 via `IntegrityError`, no pre-check SELECT) / active / complete / cancel / fix-end
 - [ ] Freeze `planned_minutes` at start from task → user fallback
 - [ ] `ws/manager.py` + `/ws` route with query-token auth

@@ -7,36 +7,12 @@ from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import func, select, update
 
 from app.core.deps import CurrentUser, get_owned_or_404, scoped
+from app.core.mutations import apply_once
 from app.db import DbSession
 from app.models import Category, Task
 from app.schemas.task import TaskCreate, TaskOut, TaskReorder, TaskStatus, TaskUpdate
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
-
-
-async def _apply_once(db: DbSession, task: Task, condition, **values) -> None:
-    """Apply a state change exactly once, deciding it in the database.
-
-    An `if task.status != "done":` pre-check is a read-then-write across two
-    statements: two rapid clicks each get their own session, both read
-    'active', and both stamp the timestamp — the very case such a guard is
-    usually written to prevent. The phase-1 document says as much in 1.5:
-    "Do not pre-check with a SELECT — two rapid clicks interleave between the
-    read and the write."
-
-    The WHERE clause carries the condition instead, so the second request
-    matches no rows and changes nothing.
-    """
-    await db.execute(
-        update(Task)
-        .where(Task.id == task.id, condition)
-        .values(**values)
-        .execution_options(synchronize_session=False)
-    )
-    await db.commit()
-    # synchronize_session=False leaves the in-session object stale, and the
-    # response is built from it.
-    await db.refresh(task)
 
 
 async def _assert_category_owned(
@@ -208,7 +184,7 @@ async def delete_task(task_id: UUID, user: CurrentUser, db: DbSession) -> None:
 @router.post("/{task_id}/archive")
 async def archive_task(task_id: UUID, user: CurrentUser, db: DbSession) -> TaskOut:
     task = await get_owned_or_404(db, Task, task_id, user)
-    await _apply_once(db, task, Task.archived_at.is_(None), archived_at=func.now())
+    await apply_once(db, task, Task.archived_at.is_(None), archived_at=func.now())
     return TaskOut.model_validate(task)
 
 
@@ -244,7 +220,7 @@ async def complete_task(task_id: UUID, user: CurrentUser, db: DbSession) -> Task
     task = await get_owned_or_404(db, Task, task_id, user)
     # A double-click must not move completed_at forward — phase 3 buckets by
     # completion day.
-    await _apply_once(
+    await apply_once(
         db, task, Task.status != "done", status="done", completed_at=func.now()
     )
     return TaskOut.model_validate(task)
@@ -253,7 +229,7 @@ async def complete_task(task_id: UUID, user: CurrentUser, db: DbSession) -> Task
 @router.post("/{task_id}/reopen")
 async def reopen_task(task_id: UUID, user: CurrentUser, db: DbSession) -> TaskOut:
     task = await get_owned_or_404(db, Task, task_id, user)
-    await _apply_once(
+    await apply_once(
         db, task, Task.status != "active", status="active", completed_at=None
     )
     return TaskOut.model_validate(task)

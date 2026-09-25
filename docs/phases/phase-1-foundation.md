@@ -307,11 +307,11 @@ reports the database missing, `docker compose down -v` and bring it back up.
 - [x] 404 (not 403) on missing-or-other-user rows
 
 **Sessions & WebSocket**
-- [ ] Migration 0004 — `sessions` + `one_running_session_per_user` partial index
-- [ ] start (409 via `IntegrityError`, no pre-check SELECT) / active / complete / cancel / fix-end
-- [ ] Freeze `planned_minutes` at start from `user.default_work_minutes` (the per-task override is phase 2)
-- [ ] `ws/manager.py` + `/ws` route with query-token auth
-- [ ] Broadcast started / completed / cancelled
+- [x] Migration 0004 — `sessions` + `one_running_session_per_user` partial index
+- [x] start (409 via `IntegrityError`, no pre-check SELECT) / active / complete / cancel / fix-end
+- [x] Freeze `planned_minutes` at start from `user.default_work_minutes` (the per-task override is phase 2)
+- [x] `ws/manager.py` + `/ws` route with query-token auth
+- [x] Broadcast started / completed / cancelled
 
 **Frontend**
 - [ ] `api/client.ts` with single-flight 401 → refresh → retry

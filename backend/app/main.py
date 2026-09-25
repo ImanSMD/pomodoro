@@ -3,14 +3,27 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+import asyncio
+import time
+
+import jwt
+from fastapi import FastAPI, Query, Request, WebSocket, WebSocketDisconnect, status
+from sqlalchemy import select, text
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from sqlalchemy import text
 
-from app.api.routes import auth, categories, settings as settings_routes, tasks
+from app.api.routes import (
+    auth,
+    categories,
+    sessions as session_routes,
+    settings as settings_routes,
+    tasks,
+)
 from app.config import Settings, get_settings
 from app.core.cookies import RefreshTokenInvalid, clear_refresh_cookie
+from app.core.security import decode_access_token
+from app.models import User
+from app.ws.manager import ConnectionManager
 from app.db import create_engine, create_session_factory
 
 
@@ -32,6 +45,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
         app.state.engine = engine
         app.state.session_factory = create_session_factory(engine)
+        app.state.ws_manager = ConnectionManager()
         yield
     finally:
         await engine.dispose()
@@ -85,6 +99,63 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(settings_routes.router)
     app.include_router(categories.router)
     app.include_router(tasks.router)
+    app.include_router(session_routes.router)
+
+    @app.websocket("/ws")
+    async def websocket_endpoint(websocket: WebSocket, token: str = Query()) -> None:
+        """Push session changes to this user's other tabs and devices.
+
+        The token arrives as a query parameter because a browser cannot set
+        headers on a WebSocket handshake — there is no way to send
+        Authorization here. It is an access token (minutes), not the refresh
+        cookie, so the exposure in proxy and server logs is bounded; a
+        subprotocol-based scheme would avoid even that if it ever matters.
+        """
+        settings: Settings = websocket.app.state.settings
+        try:
+            payload = decode_access_token(token, settings.jwt_secret)
+        except jwt.PyJWTError:
+            # Closed before accept, so no handshake completes for a caller who
+            # cannot prove who they are.
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+
+        session_factory = websocket.app.state.session_factory
+        async with session_factory() as db:
+            user = await db.scalar(select(User).where(User.id == payload["sub"]))
+        if user is None:
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+
+        manager: ConnectionManager = websocket.app.state.ws_manager
+        await websocket.accept()
+        await manager.connect(user.id, websocket)
+        try:
+            while True:
+                # The socket outlives nothing: it closes when the token that
+                # opened it expires. Authorising once at the handshake and
+                # never again would keep streaming a user's session events
+                # long after they logged out on a shared machine.
+                remaining = payload["exp"] - time.time()
+                if remaining <= 0:
+                    await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+                    break
+
+                # receive(), not receive_text(): a browser can send a Blob,
+                # and receive_text() raises KeyError on a frame carrying
+                # "bytes" instead of "text", killing the handler on traffic
+                # that is perfectly well formed.
+                message = await asyncio.wait_for(
+                    websocket.receive(), timeout=remaining
+                )
+                if message["type"] == "websocket.disconnect":
+                    break
+                # Nothing is expected from the client; anything it sends is
+                # ignored. The read exists to notice the disconnect.
+        except (WebSocketDisconnect, asyncio.TimeoutError):
+            pass
+        finally:
+            await manager.disconnect(user.id, websocket)
 
     return app
 

@@ -430,7 +430,7 @@ async def test_apply_once_is_decided_in_the_database_not_by_a_pre_check(
     from sqlalchemy import select
     from sqlalchemy.ext.asyncio import AsyncSession
 
-    from app.api.routes.tasks import _apply_once
+    from app.core.mutations import apply_once
     from app.models import Task
 
     registered = await real_db_client.post("/api/auth/register", json=register_payload)
@@ -451,10 +451,10 @@ async def test_apply_once_is_decided_in_the_database_not_by_a_pre_check(
         task_b = await b.scalar(select(Task).where(Task.id == task_id))
         assert task_a.status == task_b.status == "active"
 
-        await _apply_once(
+        await apply_once(
             a, task_a, Task.status != "done", status="done", completed_at=first_stamp
         )
-        await _apply_once(
+        await apply_once(
             b, task_b, Task.status != "done", status="done", completed_at=second_stamp
         )
 

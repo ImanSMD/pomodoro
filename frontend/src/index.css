@@ -1,77 +1,96 @@
 @import "tailwindcss";
+@import "@fontsource-variable/schibsted-grotesk";
 @plugin "tailwindcss-animate";
 
-@custom-variant dark (&:is(.dark *));
+@custom-variant dark (@media (prefers-color-scheme: dark));
 
+/* Palette: a cool mineral ground so the timer is the only thing with weight.
+   Focus is firuze (a dark turquoise), rest is saffron — two hues the eye can
+   tell apart from across a desk without reading a word. --rest is for marks
+   only; text on a break uses --rest-ink, which holds 4.5:1 on the ground. */
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.141 0.005 285.823);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.141 0.005 285.823);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.141 0.005 285.823);
-  --primary: oklch(0.21 0.006 285.885);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.967 0.001 286.375);
-  --secondary-foreground: oklch(0.21 0.006 285.885);
-  --muted: oklch(0.967 0.001 286.375);
-  --muted-foreground: oklch(0.552 0.016 285.938);
-  --accent: oklch(0.967 0.001 286.375);
-  --accent-foreground: oklch(0.21 0.006 285.885);
-  --destructive: oklch(0.577 0.245 27.325);
-  --destructive-foreground: oklch(0.985 0 0);
-  --border: oklch(0.92 0.004 286.32);
-  --input: oklch(0.92 0.004 286.32);
-  --ring: oklch(0.705 0.015 286.067);
+  --background: #eef2f0;
+  --foreground: #16302d;
+  --card: #f6f8f7;
+  --card-foreground: #16302d;
+  --popover: #fbfcfb;
+  --popover-foreground: #16302d;
+  --primary: #1f6f6a;
+  --primary-foreground: #f4faf8;
+  --secondary: #dfe7e4;
+  --secondary-foreground: #16302d;
+  --muted: #e2e9e6;
+  --muted-foreground: #56665f;
+  --accent: #dbe5e1;
+  --accent-foreground: #16302d;
+  --destructive: #b4412e;
+  --destructive-foreground: #fdf6f4;
+  --border: #cfd8d4;
+  --input: #bfcac5;
+  --ring: #1f6f6a;
   --radius: 0.625rem;
-  --chart-1: oklch(0.646 0.222 41.116);
-  --chart-2: oklch(0.6 0.118 184.704);
-  --chart-3: oklch(0.398 0.07 227.392);
-  --chart-4: oklch(0.828 0.189 84.429);
-  --chart-5: oklch(0.769 0.188 70.08);
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.141 0.005 285.823);
-  --sidebar-primary: oklch(0.21 0.006 285.885);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.967 0.001 286.375);
-  --sidebar-accent-foreground: oklch(0.21 0.006 285.885);
-  --sidebar-border: oklch(0.92 0.004 286.32);
-  --sidebar-ring: oklch(0.705 0.015 286.067);
+  --focus: #1f6f6a;
+  --focus-tint: #e1ede9;
+  --rest: #a9772f;
+  --rest-ink: #85591b;
+  --rest-tint: #f2eadc;
+  --chart-1: #1f6f6a;
+  --chart-2: #b7833a;
+  --chart-3: #4f7f9c;
+  --chart-4: #8a9b5b;
+  --chart-5: #a0615a;
+  --sidebar: #e6ece9;
+  --sidebar-foreground: #16302d;
+  --sidebar-primary: #1f6f6a;
+  --sidebar-primary-foreground: #f4faf8;
+  --sidebar-accent: #d8e2de;
+  --sidebar-accent-foreground: #16302d;
+  --sidebar-border: #cfd8d4;
+  --sidebar-ring: #1f6f6a;
+  color-scheme: light;
 }
 
-.dark {
-  --background: oklch(0.141 0.005 285.823);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.21 0.006 285.885);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.21 0.006 285.885);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.92 0.004 286.32);
-  --primary-foreground: oklch(0.21 0.006 285.885);
-  --secondary: oklch(0.274 0.006 286.033);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.274 0.006 286.033);
-  --muted-foreground: oklch(0.705 0.015 286.067);
-  --accent: oklch(0.274 0.006 286.033);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --destructive-foreground: oklch(0.985 0 0);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.552 0.016 285.938);
-  --chart-1: oklch(0.488 0.243 264.376);
-  --chart-2: oklch(0.696 0.17 162.48);
-  --chart-3: oklch(0.769 0.188 70.08);
-  --chart-4: oklch(0.627 0.265 303.9);
-  --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: oklch(0.21 0.006 285.885);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.274 0.006 286.033);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.552 0.016 285.938);
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0f1c1b;
+    --foreground: #e2ebe8;
+    --card: #152524;
+    --card-foreground: #e2ebe8;
+    --popover: #172928;
+    --popover-foreground: #e2ebe8;
+    --primary: #5fb8af;
+    --primary-foreground: #0c1817;
+    --secondary: #1d302e;
+    --secondary-foreground: #e2ebe8;
+    --muted: #1b2d2b;
+    --muted-foreground: #93a6a1;
+    --accent: #203533;
+    --accent-foreground: #e2ebe8;
+    --destructive: #e07a66;
+    --destructive-foreground: #1a0d0a;
+    --border: #253a38;
+    --input: #2e4644;
+    --ring: #5fb8af;
+    --focus: #5fb8af;
+    --focus-tint: #11302d;
+    --rest: #d9a55a;
+    --rest-ink: #e2b670;
+    --rest-tint: #2a2417;
+    --chart-1: #5fb8af;
+    --chart-2: #d9a55a;
+    --chart-3: #7fa9c4;
+    --chart-4: #aebd82;
+    --chart-5: #cf8f86;
+    --sidebar: #122120;
+    --sidebar-foreground: #e2ebe8;
+    --sidebar-primary: #5fb8af;
+    --sidebar-primary-foreground: #0c1817;
+    --sidebar-accent: #1b2e2c;
+    --sidebar-accent-foreground: #e2ebe8;
+    --sidebar-border: #223533;
+    --sidebar-ring: #5fb8af;
+    color-scheme: dark;
+  }
 }
 
 @theme inline {
@@ -111,6 +130,12 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
+  --color-focus: var(--focus);
+  --color-focus-tint: var(--focus-tint);
+  --color-rest: var(--rest);
+  --color-rest-ink: var(--rest-ink);
+  --color-rest-tint: var(--rest-tint);
+  --font-sans: "Schibsted Grotesk Variable", ui-sans-serif, system-ui, sans-serif;
 }
 
 @layer base {
@@ -122,5 +147,10 @@
     color: var(--color-foreground);
     font-synthesis-weight: none;
     -webkit-font-smoothing: antialiased;
+    font-family: var(--font-sans);
+  }
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
   }
 }

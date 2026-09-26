@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import path from 'node:path'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
@@ -29,5 +30,12 @@ export default defineConfig({
       // would read VITE_USE_POLLING=false as ON while the backend read it OFF.
       usePolling: parsePolling(process.env.VITE_USE_POLLING),
     },
+  },
+  test: {
+    environment: 'jsdom',
+    // Tests must not depend on whatever API_PORT this machine uses.
+    env: { VITE_API_URL: 'http://api.test' },
+    restoreMocks: true,
+    setupFiles: ['src/test/setup.ts'],
   },
 })

@@ -194,7 +194,10 @@ phase 2's migration 0007, so resolving `task.work_minutes ?? user.default_work_m
 mean pulling that work forward. Phase 2 adds the fallback to the same frozen value, in
 `core/settings.py`.
 
-Catch `IntegrityError` from the partial index and return 409 carrying the already-running session.
+Catch `IntegrityError` from the partial index and return 409. *(As built, the 409 body is only
+`{"detail": "A session is already running"}`, not the session itself. The client does not need it:
+on 409 it refetches `GET /api/sessions/active`, which also brings a fresh `server_now`. Recorded in
+1.6 rather than changed, since the frontend works with the API as it stands.)*
 Do not pre-check with a `SELECT` — two rapid clicks interleave between the read and the write, and
 the index is what actually makes this safe.
 
@@ -215,7 +218,7 @@ muted, and offer only live ones in the picker. Loading the default list alone le
 `category_id`s it cannot name.
 
 **Open the app at `http://localhost:5173`, not `http://127.0.0.1:5173`.** They are different sites
-to the browser, so the 127.0.0.1 spelling makes cross-site calls to `localhost:8000` and the
+to the browser, so the 127.0.0.1 spelling makes cross-site calls to `localhost:${API_PORT}` and the
 `SameSite=Lax` refresh cookie is withheld — login works, then dies at the first token refresh.
 CORS allows only the `localhost` origin so this fails loudly instead.
 
@@ -235,6 +238,152 @@ CORS allows only the `localhost` origin so this fails loudly instead.
 - `useSessionSocket()` — opens the WS, invalidates `['session','active']` and `['tasks']` on each
   event, and reconnects with backoff.
 - Mirror the remaining time into `document.title` so the countdown is visible in a background tab.
+
+### As built
+
+Review loop: twelve `/code-review high` passes returned 10, 10, 9, 10, 10, 9, 10, 9, 8, 8, 9, 10
+findings. **It did not reach a clean pass, and 1.6 closes without one** — the strict bar this
+section's auth and session logic is meant to hold. Recorded rather than glossed: every finding
+was either fixed with a test that fails without the fix (checked by reverting each fix), or is
+listed below with the reason it stands. The passes did not spin on the same issues; each went a
+layer deeper into interleavings of tabs, clocks, and sign-in/out — and three times found a
+regression introduced by an earlier fix (a refresh timeout that abandoned rotations, a
+sign-out made "instant" that let a reload undo it, a flag set before login succeeded), each
+caught and reversed. The same pattern that led 1.1 to revise the bar for documentation-heavy
+diffs; whether 1.6 should be held to strict zero regardless is a call for the phase owner.
+
+Verification: the Definition-of-done flows below were driven in headless Chromium against the
+running stack (Playwright — the Chrome extension was unavailable): register → category → task →
+start; hard refresh mid-session (−0.2 s drift); second tab updated within ~70–120 ms; double
+start (one 201, one 409, both tabs converge on the running session); a browser clock 7 minutes
+fast still reads 24:59; socket reconnect across a 1-minute token expiry; overdue-session
+prompt; sign-out surviving a reload; 1280 px, 900 px and 390 px layouts. The boxes stay
+unticked: the exit gate asks for a pass by hand, which is still to do. `/security-review`: no
+findings on the 1.6 diff.
+
+Standing, with reasons:
+- *Backend gaps* (two, below): uncapped `/complete`, and no running-session check on task
+  delete/archive. The client guards both; the durable fix is server-side and 1.6 was told not to
+  change backend behaviour.
+- *A socket that dies silently* is replaced when the browser reports it is back online, but
+  detecting a dead socket in general needs a server ping the backend does not send.
+- *Invalidating `['tasks']` on every session event, and the archived-inclusive task cache,* are
+  what this section's plan specifies; at personal scale the extra list download is acceptable.
+
+- **React 19, not 18.** The current shadcn CLI generates React 19 components (`ref` as a plain
+  prop, no `forwardRef`). On React 18 every ref through `Input`, `Button asChild` and the Radix
+  triggers was silently dropped, which broke focus and menu anchoring. Upgrading React was the
+  honest fix; hand-patching generated files would regress on the next `shadcn add`.
+- **Check every `shadcn add`.** The CLI wrote `import { cn } from "cn"` into each component and
+  installed an unrelated npm package called `cn`. The imports now point at `@/lib/utils` and the
+  package is gone; look for this again whenever a component is added.
+- **Cross-tab refresh is serialised with the Web Locks API** (`navigator.locks`), on top of the
+  in-tab single flight. All tabs share one rotating cookie, so two tabs refreshing together would
+  otherwise send the same cookie and the loser would land in the server's grace window with a 401.
+- **Clock offset** is `server_now − Date.now()` taken at receipt of each `/sessions/active`
+  response and carried on that query's data as `offsetMs` — there is no separate
+  `useServerOffset()` hook; a second subscription to the same query only to read one field was
+  redundant. Mutation responses carry no `server_now`, so they invalidate that query rather than
+  writing to it — every refetch refreshes the offset. The countdown reads the corrected clock *at
+  render time*: a stored reading taken before the offset arrived once made a fast browser claim
+  `complete` minutes early.
+- **Logout is sequenced with refresh.** It waits for any in-flight refresh (whose Set-Cookie is the
+  cookie it must revoke) and posts under the same cross-tab lock, so a refresh cannot land after it
+  and leave the tab signed in on reload.
+- **The socket refreshes once when a handshake is refused**, since the local expiry check reads
+  the browser clock and the server reads its own — but at most once per token, so a `/ws` that is
+  unreachable for other reasons does not rotate the cookie on every retry.
+- **Timer stage lives in the app shell**, not on the task page, so the countdown, the zero-crossing
+  `complete` claim and the tab title keep running on every page.
+- **One `['tasks']` cache** (`include_archived=true`, filtered on the client), so the timer can
+  always name the running task whatever list is on screen.
+- **Frontend tests** use Vitest + Testing Library: `docker compose exec web npm test`. They cover
+  the single-flight refresh, the countdown (skew, sleep, zero-crossing, retry), the socket's
+  reconnect/backoff/token refresh, and category resolution. Each was checked by breaking the
+  behaviour and watching the test fail.
+- **New frontend dependencies** reach the running container only through `docker compose exec web
+  npm install <pkg>` or `up --build --renew-anon-volumes` — see the note in `compose.yaml`.
+- **Logout gates refresh until the next sign-in.** If the logout POST fails, a refresh queued
+  behind it would still carry a valid cookie; `logout()` sets a flag checked under the refresh
+  lock, and only an explicit login/register (`beginSession`) lifts it. Where Web Locks are
+  missing, a refresh 401 is retried once after a second: inside `REFRESH_REUSE_GRACE` the server
+  refuses a benign duplicate while the sibling's fresh cookie lands. With the lock no two of our
+  refreshes can overlap, so there a 401 is final at once and a signed-out load pays no delay.
+- **The running task cannot be archived or deleted** from the list: the backend would leave its
+  session running against a task no list shows. Finish or discard first.
+- **Long-overdue sessions are not claimed silently.** `POST /sessions/{id}/complete` records
+  `ended_at − started_at` with no upper bound, so a session left running with every tab closed
+  would, at the next page load, record the whole night as focus. The client auto-claims only
+  within `OVERDUE_CLAIM_LIMIT_MS` (15 min) of the end — the throttled or briefly asleep tab the
+  brief describes. Beyond that the timer asks: record the planned minutes (fix-end with
+  `duration_minutes`), record everything, or discard. A deliberate client-side policy, made
+  without changing backend behaviour; capping `complete` server-side is the sturdier fix and is
+  worth deciding before phase 3 totals anything.
+- **API gap — deleting or archiving a task does not check for a running session.** The list
+  disables Archive, Delete and Done on the running task, but that guard reads this tab's cache: a
+  second device a few seconds behind can still delete it, leaving a session running against a
+  task no list shows. A 409 from `DELETE /tasks/{id}` and `/archive` while a session runs would
+  close it properly. Not changed here, since 1.6 does not change backend behaviour.
+- **Logout is single-flight, and sign-in waits for any logout or refresh in flight** — either one
+  landing after a new login would overwrite it (a logout clears its token and deletes the cookie
+  it just set; the boot refresh installs its own token). A sign-in also supersedes the boot
+  restore — once the login has succeeded, so a wrong password keeps the session the boot is
+  still loading. Logout's waits share one 20 s deadline (below). A refresh gets a much longer one,
+  60 s: abandoning a refresh the server still completes rotates the cookie out from under the
+  browser, so it must never be cut short — but one that never answers would hold the cross-tab
+  lock and every tab's boot behind it. A minute is far past any real refresh, and turns a hung
+  server into "can't reach the server — try again" instead of an endless loading mark. If the logout never reaches the server the
+  user is told this browser may still be signed in, rather than shown a clean sign-out.
+- **A refresh that returns a different account switches the tab over cleanly.** All tabs share
+  one refresh cookie, so signing in as someone else in one tab makes every other tab's next
+  refresh return that user. The client compares it with the tab's user; on a change the request
+  that triggered the refresh is refused rather than replayed under the new account, the cache is
+  cleared, and the signed-in tree remounts (keyed on user id), socket included.
+- **The zero-crossing claim re-reads `/sessions/active` before completing.** Zero by the cached
+  clock offset is not zero by the server if the browser clock jumped since (NTP correcting after
+  sleep); the fresh `server_now` decides, and refreshes the offset the countdown uses.
+- **The boot restore takes the user from the refresh response**, which already carries it — no
+  `/auth/me` round trip, and the tab knows whose it is from its first refresh.
+- **A failed background refetch keeps the list it already has**, with a note, rather than hiding
+  it behind an error.
+- **Every request remembers the session it was sent under.** If a sign-in, a sign-out, or a
+  refresh that found another account has happened by the time its 401 comes back, it is refused
+  rather than retried — reusing a newer token from memory would otherwise replay it as someone
+  else. Sign-in itself runs under the cross-tab refresh lock, after any refresh in flight, so the
+  previous account's rotated cookie cannot land over the new one.
+- **An auth epoch orders sign-in, sign-out and refresh.** Every sign-in and sign-out bumps it, and
+  a refresh landing under an older epoch is discarded whole — it cannot install its token over a
+  new sign-in, nor report a lapsed session while the user signs out on purpose. With that, logout
+  no longer has to wait out a refresh indefinitely: everything it waits on (a refresh in flight,
+  the lock, the POST) shares one 20 s deadline, and sign-in waits only for logout.
+- Accepted: each socket open re-fetches the active session and session lists, which on first
+  page load duplicates the mount's fetch (and repeats at each token expiry). Skipping it risks
+  missing an event published between the fetch and the socket opening; one small request per
+  open is the cheaper side.
+- **Signing out shows "Signing out…" until the server confirms**, capped at 20 s. The token is
+  dropped at once, but the login page is not shown until the cookie is revoked: showing it
+  earlier invited an immediate reload, which aborted the logout POST and signed straight back in
+  (caught in the browser, not by a test — a pass-8 fix had made sign-out "instant"). Past the
+  cap it signs out anyway, with the may-still-be-signed-in warning. It also no longer carries the
+  old page into the next sign-in, which may be someone else's; a lapsed session or a deep link
+  still returns to where it was. The redirect guard also refuses `/\host`.
+- **Invalidation keeps TanStack's default `cancelRefetch`.** Joining an in-flight refetch after a
+  mutation can cache an answer from before the change; a duplicate request is the cheaper cost.
+  A failed end-session claim rechecks only the active session, not the task list.
+- **Settling an overdue session re-reads `/sessions/active` first.** Fix-end, unlike complete,
+  rewrites a completed session, and the overdue screen can be stale after sleep.
+- **"Record all" on an overdue session is offered only up to 24 hours**, the `MAX_SESSION_MINUTES`
+  fix-end enforces — `/complete` does not, so past it the choice would store an impossible session.
+- **A running session whose task this tab has never loaded** (started elsewhere while this tab's
+  socket was down) triggers one refetch of the task list, so the timer can name it.
+- Checked and not changed: dialogs opened from dropdown items (Edit, Delete) — focus lands in the
+  dialog and `body` pointer-events are restored on close with the Radix version installed.
+- **No break follow-up.** A "Focus done — take a break?" prompt was built and then removed in
+  review: work → break cycling is phase 4.3's, and a manual version of it here would be that work
+  pulled forward. Phase 1 runs one session at a time; breaks can be started through the API only.
+- Not built here, deliberately: drag-to-reorder of tasks (the API exists; no 1.6 item asks for the
+  UI) and editing settings (the Settings page is a read-only stub). The Task detail page is a stub
+  listing the task's sessions; phase 2 builds the real one.
 
 ---
 
@@ -314,12 +463,13 @@ reports the database missing, `docker compose down -v` and bring it back up.
 - [x] Broadcast started / completed / cancelled
 
 **Frontend**
-- [ ] `api/client.ts` with single-flight 401 → refresh → retry
-- [ ] `AuthProvider`, `ProtectedRoute`, Login + Register pages
-- [ ] App shell: category sidebar + task list
-- [ ] `useServerOffset`, `useActiveSession`, `TimerRing` (recompute, never decrement)
-- [ ] `useSessionSocket` with reconnect backoff
-- [ ] Remaining time in `document.title`
+- [x] `api/client.ts` with single-flight 401 → refresh → retry
+- [x] `AuthProvider`, `ProtectedRoute`, Login + Register pages
+- [x] App shell: category sidebar + task list
+- [x] Server clock offset (on `useActiveSession`'s data — see *As built*), `TimerRing` (recompute, never decrement)
+- [x] `useSessionSocket` with reconnect backoff
+- [x] Remaining time in `document.title`
+- [x] Vitest suite for the client, timer, socket and category logic
 
 **Tests & docs**
 - [ ] `conftest.py` against real Postgres, rollback per test

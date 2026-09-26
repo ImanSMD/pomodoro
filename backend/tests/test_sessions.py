@@ -196,3 +196,149 @@ async def test_sessions_are_scoped_to_their_owner(
             f"/api/sessions/{started['id']}/cancel", headers=headers
         )
     ).status_code == 404
+
+
+async def test_a_long_overdue_session_cannot_just_be_completed(
+    authed_client: httpx.AsyncClient
+):
+    """Elapsed time stops being evidence of work at some point.
+
+    /complete records ended_at - started_at. Unbounded, a session left running
+    with every tab closed records the whole night as focus the next time
+    anything claims it — silently, and phase 3 sums it.
+    """
+    from app.models import Session as SessionModel
+
+    task_id = await _task(authed_client)
+    started = (await _start(authed_client, task_id)).json()
+
+    session = await authed_client.session.scalar(  # type: ignore[attr-defined]
+        select(SessionModel).where(SessionModel.id == started["id"])
+    )
+    session.started_at = datetime.now(timezone.utc) - timedelta(hours=9)
+    await authed_client.session.commit()  # type: ignore[attr-defined]
+
+    response = await authed_client.post(f"/api/sessions/{started['id']}/complete")
+    assert response.status_code == 409, response.text
+    assert "planned end" in response.json()["detail"]
+
+
+async def test_a_briefly_overdue_session_still_completes(
+    authed_client: httpx.AsyncClient
+):
+    """The window has to cover a throttled or briefly asleep tab.
+
+    That is the case the countdown's zero-crossing claim actually hits, so
+    refusing it would break the normal path.
+    """
+    from app.models import Session as SessionModel
+
+    task_id = await _task(authed_client)
+    started = (await _start(authed_client, task_id)).json()
+
+    session = await authed_client.session.scalar(  # type: ignore[attr-defined]
+        select(SessionModel).where(SessionModel.id == started["id"])
+    )
+    # 25-minute plan, started 40 minutes ago: 15 minutes overdue.
+    session.started_at = datetime.now(timezone.utc) - timedelta(minutes=40)
+    await authed_client.session.commit()  # type: ignore[attr-defined]
+
+    response = await authed_client.post(f"/api/sessions/{started['id']}/complete")
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "completed"
+
+
+async def test_an_overdue_session_can_still_be_closed_with_fix_end(
+    authed_client: httpx.AsyncClient
+):
+    # The way out of the 409 above: say when it actually ended.
+    from app.models import Session as SessionModel
+
+    task_id = await _task(authed_client)
+    started = (await _start(authed_client, task_id)).json()
+
+    session = await authed_client.session.scalar(  # type: ignore[attr-defined]
+        select(SessionModel).where(SessionModel.id == started["id"])
+    )
+    session.started_at = datetime.now(timezone.utc) - timedelta(hours=9)
+    await authed_client.session.commit()  # type: ignore[attr-defined]
+
+    fixed = await authed_client.patch(
+        f"/api/sessions/{started['id']}", json={"duration_minutes": 25}
+    )
+    assert fixed.status_code == 200, fixed.text
+    assert fixed.json()["duration_seconds"] == 25 * 60
+
+
+async def test_an_overdue_session_can_still_be_cancelled(
+    authed_client: httpx.AsyncClient
+):
+    from app.models import Session as SessionModel
+
+    task_id = await _task(authed_client)
+    started = (await _start(authed_client, task_id)).json()
+
+    session = await authed_client.session.scalar(  # type: ignore[attr-defined]
+        select(SessionModel).where(SessionModel.id == started["id"])
+    )
+    session.started_at = datetime.now(timezone.utc) - timedelta(hours=9)
+    await authed_client.session.commit()  # type: ignore[attr-defined]
+
+    response = await authed_client.post(f"/api/sessions/{started['id']}/cancel")
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "cancelled"
+
+
+@pytest.mark.parametrize("path", ["", "/archive"])
+async def test_a_task_with_a_running_session_cannot_be_removed(
+    authed_client: httpx.AsyncClient, path: str
+):
+    """Otherwise the session runs against a task no list shows.
+
+    It stays unreachable except through /sessions/active, and blocks every new
+    start with a 409. The client disables these buttons, but that reads one
+    tab's cache — a second device a few seconds behind would still do it.
+    """
+    task_id = await _task(authed_client)
+    await _start(authed_client, task_id)
+
+    if path:
+        response = await authed_client.post(f"/api/tasks/{task_id}{path}")
+    else:
+        response = await authed_client.delete(f"/api/tasks/{task_id}")
+    assert response.status_code == 409, response.text
+
+    # And the task is still there.
+    assert [t["id"] for t in (await authed_client.get("/api/tasks")).json()] == [task_id]
+
+
+@pytest.mark.parametrize("path", ["", "/archive"])
+async def test_the_task_can_be_removed_once_the_session_ends(
+    authed_client: httpx.AsyncClient, path: str
+):
+    task_id = await _task(authed_client)
+    started = (await _start(authed_client, task_id)).json()
+    await authed_client.post(f"/api/sessions/{started['id']}/complete")
+
+    if path:
+        response = await authed_client.post(f"/api/tasks/{task_id}{path}")
+        assert response.status_code == 200, response.text
+    else:
+        response = await authed_client.delete(f"/api/tasks/{task_id}")
+        assert response.status_code == 204, response.text
+
+
+async def test_another_users_running_session_does_not_block_my_delete(
+    authed_client: httpx.AsyncClient, second_user_token: str
+):
+    # The EXISTS is correlated on task_id, so it must not see across users.
+    headers = {"Authorization": f"Bearer {second_user_token}"}
+    theirs = (
+        await authed_client.post("/api/tasks", json={"title": "Theirs"}, headers=headers)
+    ).json()["id"]
+    await authed_client.post(
+        "/api/sessions/start", json={"task_id": theirs}, headers=headers
+    )
+
+    mine = await _task(authed_client, "Mine")
+    assert (await authed_client.delete(f"/api/tasks/{mine}")).status_code == 204

@@ -261,10 +261,20 @@ prompt; sign-out surviving a reload; 1280 px, 900 px and 390 px layouts. The box
 unticked: the exit gate asks for a pass by hand, which is still to do. `/security-review`: no
 findings on the 1.6 diff.
 
+**The two backend gaps 1.6 recorded are now closed** (after 1.6, by the phase owner — 1.6 was
+correctly told not to change backend behaviour):
+
+- `POST /sessions/{id}/complete` refuses a session more than `COMPLETE_GRACE` (1 hour) past its
+  planned end, with a 409 pointing at `PATCH` or cancel. The window still covers the case the
+  countdown's zero-crossing claim actually hits — a throttled or briefly asleep tab — so the normal
+  path is untouched. The client's 15-minute policy now sits inside a server-side bound rather than
+  being the only thing standing between a forgotten timer and a night of "focus".
+- `DELETE /tasks/{id}` and `/archive` refuse while a session runs on that task, as a correlated
+  `EXISTS` inside the same `UPDATE` — not a SELECT then a write, which would reproduce the same gap
+  in miniature. The client's disabled buttons read one tab's cache; this holds for a second device
+  that is seconds behind.
+
 Standing, with reasons:
-- *Backend gaps* (two, below): uncapped `/complete`, and no running-session check on task
-  delete/archive. The client guards both; the durable fix is server-side and 1.6 was told not to
-  change backend behaviour.
 - *A socket that dies silently* is replaced when the browser reports it is back online, but
   detecting a dead socket in general needs a server ping the backend does not send.
 - *Invalidating `['tasks']` on every session event, and the archived-inclusive task cache,* are
@@ -311,19 +321,16 @@ Standing, with reasons:
   refreshes can overlap, so there a 401 is final at once and a signed-out load pays no delay.
 - **The running task cannot be archived or deleted** from the list: the backend would leave its
   session running against a task no list shows. Finish or discard first.
-- **Long-overdue sessions are not claimed silently.** `POST /sessions/{id}/complete` records
-  `ended_at − started_at` with no upper bound, so a session left running with every tab closed
-  would, at the next page load, record the whole night as focus. The client auto-claims only
-  within `OVERDUE_CLAIM_LIMIT_MS` (15 min) of the end — the throttled or briefly asleep tab the
-  brief describes. Beyond that the timer asks: record the planned minutes (fix-end with
-  `duration_minutes`), record everything, or discard. A deliberate client-side policy, made
-  without changing backend behaviour; capping `complete` server-side is the sturdier fix and is
-  worth deciding before phase 3 totals anything.
-- **API gap — deleting or archiving a task does not check for a running session.** The list
-  disables Archive, Delete and Done on the running task, but that guard reads this tab's cache: a
-  second device a few seconds behind can still delete it, leaving a session running against a
-  task no list shows. A 409 from `DELETE /tasks/{id}` and `/archive` while a session runs would
-  close it properly. Not changed here, since 1.6 does not change backend behaviour.
+- **Long-overdue sessions are not claimed silently.** The client auto-claims only within
+  `OVERDUE_CLAIM_LIMIT_MS` (15 min) of the end — the throttled or briefly asleep tab the brief
+  describes. Beyond that the timer asks: record the planned minutes (fix-end with
+  `duration_minutes`), record everything, or discard. Since 1.6 the server enforces its own,
+  looser bound (`COMPLETE_GRACE`, 1 hour), so the client policy is now defence in depth rather
+  than the only guard.
+- **The running task cannot be removed, now on both sides.** The list disables Archive, Delete
+  and Done on the running task; since 1.6 the API also returns 409 from `DELETE /tasks/{id}` and
+  `/archive` while a session runs, so a second device a few seconds behind cannot leave a session
+  running against a task no list shows.
 - **Logout is single-flight, and sign-in waits for any logout or refresh in flight** — either one
   landing after a new login would overwrite it (a logout clears its token and deletes the cookie
   it just set; the boot refresh installs its own token). A sign-in also supersedes the boot

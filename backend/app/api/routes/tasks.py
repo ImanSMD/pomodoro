@@ -10,9 +10,39 @@ from app.core.deps import CurrentUser, get_owned_or_404, scoped
 from app.core.mutations import apply_once
 from app.db import DbSession
 from app.models import Category, Task
+from app.models import Session as SessionModel
 from app.schemas.task import TaskCreate, TaskOut, TaskReorder, TaskStatus, TaskUpdate
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
+
+
+def _has_a_running_session(task: Task):
+    """A correlated EXISTS, so the check and the write are one statement.
+
+    The client disables these buttons, but that reads one tab's cache: a
+    second device a few seconds behind would still delete the task, leaving a
+    session running against something no list shows — unreachable except
+    through /sessions/active, and blocking every new start with a 409.
+
+    A SELECT followed by an UPDATE would have the same gap in miniature, which
+    is the pattern apply_once exists to avoid.
+    """
+    return (
+        select(SessionModel.id)
+        .where(
+            SessionModel.task_id == task.id,
+            SessionModel.status == "running",
+            SessionModel.deleted_at.is_(None),
+        )
+        .exists()
+    )
+
+
+def _running_session_conflict() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail="A session is running on this task. Finish or cancel it first.",
+    )
 
 
 async def _assert_category_owned(
@@ -177,14 +207,27 @@ async def update_task(
 @router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_task(task_id: UUID, user: CurrentUser, db: DbSession) -> None:
     task = await get_owned_or_404(db, Task, task_id, user)
-    task.deleted_at = datetime.now(timezone.utc)
-    await db.commit()
+    applied = await apply_once(
+        db, task, ~_has_a_running_session(task), deleted_at=func.now()
+    )
+    if not applied:
+        raise _running_session_conflict()
 
 
 @router.post("/{task_id}/archive")
 async def archive_task(task_id: UUID, user: CurrentUser, db: DbSession) -> TaskOut:
     task = await get_owned_or_404(db, Task, task_id, user)
-    await apply_once(db, task, Task.archived_at.is_(None), archived_at=func.now())
+    if task.archived_at is not None:
+        return TaskOut.model_validate(task)  # already archived, nothing to do
+
+    applied = await apply_once(
+        db,
+        task,
+        Task.archived_at.is_(None) & ~_has_a_running_session(task),
+        archived_at=func.now(),
+    )
+    if not applied:
+        raise _running_session_conflict()
     return TaskOut.model_validate(task)
 
 

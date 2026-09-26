@@ -13,6 +13,7 @@ from app.core.mutations import apply_once
 from app.db import DbSession
 from app.models import Session, Task, User
 from app.schemas.session import (
+    COMPLETE_GRACE,
     FUTURE_SKEW_ALLOWANCE,
     MAX_SESSION_MINUTES,
     ActiveSession,
@@ -112,6 +113,22 @@ async def complete_session(
 ) -> SessionOut:
     session = await get_owned_or_404(db, Session, session_id, user)
     ended = _now()
+
+    overdue_by = ended - (
+        session.started_at + timedelta(minutes=session.planned_minutes)
+    )
+    if session.status == "running" and overdue_by > COMPLETE_GRACE:
+        # Too late to just claim it. The elapsed time is no longer evidence of
+        # work: a session left running with every tab closed would record the
+        # whole night. Say when it actually ended instead.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "This session is more than "
+                f"{int(COMPLETE_GRACE.total_seconds() // 60)} minutes past its "
+                "planned end. Set its end time with PATCH, or cancel it."
+            ),
+        )
 
     # Idempotent, and decided in the WHERE clause: a retry or a double-click
     # must not move ended_at, which phase 3 buckets by.

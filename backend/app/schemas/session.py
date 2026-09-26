@@ -30,6 +30,16 @@ MAX_SESSION_MINUTES = 24 * 60
 # future, which no real session has.
 FUTURE_SKEW_ALLOWANCE = timedelta(minutes=5)
 
+# How far past its planned end a session may still be *completed*.
+#
+# "Complete" means "it just finished", so the window only has to cover a tab
+# that was throttled or briefly asleep when the countdown hit zero. Without a
+# bound, a session left running with every tab closed records the whole night
+# as focus the next time anything claims it — silently, and phase 3 sums it.
+# Past this, the client must say when the session actually ended (fix-end,
+# which is bounded at MAX_SESSION_MINUTES) or discard it.
+COMPLETE_GRACE = timedelta(hours=1)
+
 
 class SessionStart(BaseModel):
     model_config = ConfigDict(extra="forbid")

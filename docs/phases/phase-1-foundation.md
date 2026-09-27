@@ -421,6 +421,26 @@ reports the database missing, `docker compose down -v` and bring it back up.
 | `test_sessions.py` | two concurrent starts → exactly one 201 and one 409 · complete computes duration · complete is idempotent · cancel · fix-end |
 | `test_tasks.py` | soft delete hides from list · archive/restore · reorder persists |
 
+### As built
+
+The fixtures and all four files landed alongside the code in 1.2–1.5 rather than as a batch here,
+which is what the workflow's "tests alongside the code" rule asks for. What 1.8 actually did was
+reconcile the table above against the suite. One row was not honestly ticked: every start test was
+*sequential*, so an application-level "is anything running?" pre-check would have passed them all —
+the overlap the partial index exists for was untested.
+`test_sessions.py::test_two_concurrent_starts_yield_one_201_and_one_409` closes it, staging the
+interleaving across two `AsyncSession`s and calling `start_session` directly. Verified three ways:
+it fails with the index dropped, and — with the index dropped *and* a pre-check injected — it fails
+while the sequential test passes, which is the distinction it exists to draw.
+
+`conftest.py` grew a third client fixture the plan did not anticipate, `real_db_client`: a session
+and connection per request, real commits, `TRUNCATE users CASCADE` on teardown. The `client` fixture
+shares one session so the outer transaction can roll everything back, and that makes genuine
+concurrency untestable — `SELECT … FOR UPDATE` never blocks against its own transaction, and
+`asyncio.gather` on a shared `AsyncSession` raises rather than running in parallel.
+
+254 tests.
+
 ---
 
 ## Definition of done
@@ -482,9 +502,9 @@ reports the database missing, `docker compose down -v` and bring it back up.
 - [x] Vitest suite for the client, timer, socket and category logic
 
 **Tests & docs**
-- [ ] `conftest.py` against real Postgres, rollback per test
-- [ ] `test_auth.py`, `test_scoping.py`, `test_sessions.py`, `test_tasks.py`
-- [ ] Rewrite `CLAUDE.md` for the new stack
+- [x] `conftest.py` against real Postgres, rollback per test
+- [x] `test_auth.py`, `test_scoping.py`, `test_sessions.py`, `test_tasks.py`
+- [x] Rewrite `CLAUDE.md` for the new stack
 
 ---
 

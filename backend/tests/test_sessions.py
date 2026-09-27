@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
+from uuid import UUID
 
 import httpx
 import pytest
+from fastapi import HTTPException
 from sqlalchemy import select
 
 from app.models import Session
+from app.schemas.session import SessionOut
 
 pytestmark = pytest.mark.asyncio
 
@@ -342,3 +346,82 @@ async def test_another_users_running_session_does_not_block_my_delete(
 
     mine = await _task(authed_client, "Mine")
     assert (await authed_client.delete(f"/api/tasks/{mine}")).status_code == 204
+
+
+async def test_two_concurrent_starts_yield_one_201_and_one_409(
+    engine, real_db_client: httpx.AsyncClient, register_payload: dict[str, str]
+):
+    """The overlap the partial unique index exists for.
+
+    Every other start test is sequential: the second request runs after the
+    first has committed, so an application-level "is anything running?"
+    pre-check would pass them too. Here both writers reach their INSERT while
+    the other's row is still uncommitted — the window a pre-check cannot
+    close.
+
+    Driving this through `authed_client` proves nothing: every request shares
+    one AsyncSession, so the second INSERT would be in the same transaction as
+    the first and could never conflict with it. Hence two independent sessions
+    and the production handler called directly.
+    """
+    from types import SimpleNamespace
+
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app.api.routes.sessions import _running, start_session
+    from app.models import User
+    from app.schemas.session import SessionStart
+    from app.ws.manager import ConnectionManager
+
+    registered = await real_db_client.post("/api/auth/register", json=register_payload)
+    assert registered.status_code == 201, registered.text
+    headers = {"Authorization": f"Bearer {registered.json()['access_token']}"}
+    user_id = UUID(registered.json()["user"]["id"])
+    task_id = UUID(
+        (
+            await real_db_client.post(
+                "/api/tasks", json={"title": "Write"}, headers=headers
+            )
+        ).json()["id"]
+    )
+
+    body = SessionStart(task_id=task_id, kind="work")
+    # No websocket is registered, so broadcast is a no-op — this only satisfies
+    # the handler's dependency on app.state.
+    connection = SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(ws_manager=ConnectionManager()))
+    )
+
+    async with AsyncSession(engine, expire_on_commit=False) as a, AsyncSession(
+        engine, expire_on_commit=False
+    ) as b:
+        user_a = await a.get(User, user_id)
+        user_b = await b.get(User, user_id)
+
+        # Both observe an idle timer before either writes. This is the state a
+        # read-then-write guard would act on, and it is why the check has to be
+        # the index.
+        assert await a.scalar(_running(user_a)) is None
+        assert await b.scalar(_running(user_b)) is None
+
+        results = await asyncio.gather(
+            start_session(body, user_a, a, connection),  # type: ignore[arg-type]
+            start_session(body, user_b, b, connection),  # type: ignore[arg-type]
+            return_exceptions=True,
+        )
+
+    created = [r for r in results if isinstance(r, SessionOut)]
+    refused = [r for r in results if isinstance(r, HTTPException)]
+    assert len(created) == 1, results
+    assert len(refused) == 1, results
+    assert refused[0].status_code == 409, refused[0].detail
+
+    async with AsyncSession(engine) as verify:
+        running = (
+            await verify.scalars(
+                select(Session).where(
+                    Session.user_id == user_id, Session.status == "running"
+                )
+            )
+        ).all()
+    assert [s.id for s in running] == [created[0].id]

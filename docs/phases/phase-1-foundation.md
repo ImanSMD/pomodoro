@@ -330,7 +330,12 @@ correctly told not to change backend behaviour):
 
 Standing, with reasons:
 - *A socket that dies silently* is replaced when the browser reports it is back online, but
-  detecting a dead socket in general needs a server ping the backend does not send.
+  detecting a dead socket in general needs a server ping the backend does not send. Narrowed at the
+  exit gate: this now covers only a *network*-dead socket. The case where the **server** gives up on
+  a socket is fixed — `broadcast` used to deregister an unresponsive client without closing it, so
+  the handler stayed parked in `receive()`, the connection stayed open, and `onclose` — the client's
+  only reconnect trigger — never fired. That tab showed a live socket and a frozen timer until its
+  access token expired, up to 15 minutes. It is closed with code 1011 now, best-effort.
 - *Invalidating `['tasks']` on every session event, and the archived-inclusive task cache,* are
   what this section's plan specifies; at personal scale the extra list download is acceptable.
 

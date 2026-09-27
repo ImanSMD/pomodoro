@@ -182,3 +182,38 @@ async def test_login_does_equal_work_for_known_and_unknown_emails(
     # magnitude. Before the fix the ratio was ~50x.
     ratio = max(known, unknown) / min(known, unknown)
     assert ratio < 3, f"timing oracle: known={known:.4f}s unknown={unknown:.4f}s ratio={ratio:.1f}x"
+
+
+@pytest.mark.parametrize(
+    ("path", "extra"),
+    [
+        ("/api/auth/register", {"timezone": "Europe/Berlin"}),
+        ("/api/auth/register", {"default_work_minutes": 90}),
+        ("/api/auth/login", {"bogus": "x"}),
+    ],
+)
+async def test_unknown_fields_are_rejected_not_ignored(
+    client: httpx.AsyncClient, register_payload: dict[str, str], path: str, extra: dict
+):
+    """The two auth schemas were the only input models without extra="forbid".
+
+    A sign-up form posting the browser's detected timezone — a real column on
+    users, and the most natural extra field on this endpoint — got a 201 and an
+    account on the Asia/Tehran default, with nothing saying the field was
+    dropped. It feeds phase 3's AT TIME ZONE bucketing, so a wrong value is
+    durable and silent.
+    """
+    if path.endswith("login"):
+        assert (
+            await client.post("/api/auth/register", json=register_payload)
+        ).status_code == 201
+        body = {
+            "email": register_payload["email"],
+            "password": register_payload["password"],
+            **extra,
+        }
+    else:
+        body = {**register_payload, **extra}
+
+    response = await client.post(path, json=body)
+    assert response.status_code == 422, response.text

@@ -13,14 +13,21 @@ pytestmark = pytest.mark.asyncio
 
 
 class FakeSocket:
-    def __init__(self, fail: bool = False) -> None:
+    def __init__(self, fail: bool = False, close_fails: bool = False) -> None:
         self.sent: list[dict] = []
         self.fail = fail
+        self.close_fails = close_fails
+        self.closed_with: int | None = None
 
     async def send_json(self, message: dict) -> None:
         if self.fail:
             raise RuntimeError("client is gone")
         self.sent.append(message)
+
+    async def close(self, code: int = 1000) -> None:
+        if self.close_fails:
+            raise RuntimeError("socket is past closing")
+        self.closed_with = code
 
 
 async def test_broadcast_reaches_every_socket_for_that_user():
@@ -125,3 +132,38 @@ async def test_a_silent_socket_does_not_block_the_broadcast():
     # The responsive socket still got it, and the silent one was dropped.
     assert len(alive.sent) == 1
     assert manager.connection_count(user_id) == 1
+
+
+async def test_a_dropped_socket_is_closed_and_not_merely_deregistered():
+    """Deregistering alone leaves the client believing it is subscribed.
+
+    The handler in main.py is parked in receive(), so removing the socket from
+    the registry does not end the connection. The client reconnects from
+    onclose and has no heartbeat, so without the close it never learns it has
+    stopped receiving events — it shows a live socket and a frozen timer until
+    the access token expires, up to ACCESS_TOKEN_TTL_MINUTES later.
+    """
+    manager = ConnectionManager()
+    user_id = uuid4()
+    dead = FakeSocket(fail=True)
+
+    await manager.connect(user_id, dead)
+    await manager.broadcast(user_id, "session.started")
+
+    assert dead.closed_with is not None, "dropped without being closed"
+    assert manager.connection_count(user_id) == 0
+
+
+async def test_a_socket_that_cannot_be_closed_is_still_forgotten():
+    # Closing is best-effort: the write has committed and the response is owed,
+    # so a socket too broken to close must not fail the request either.
+    manager = ConnectionManager()
+    user_id = uuid4()
+    dead, alive = FakeSocket(fail=True, close_fails=True), FakeSocket()
+
+    await manager.connect(user_id, dead)
+    await manager.connect(user_id, alive)
+    await manager.broadcast(user_id, "session.started")
+
+    assert manager.connection_count(user_id) == 1
+    assert len(alive.sent) == 1

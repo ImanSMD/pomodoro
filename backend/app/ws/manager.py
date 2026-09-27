@@ -59,9 +59,22 @@ class ConnectionManager:
             except (Exception, asyncio.TimeoutError):
                 # Dropped, or simply not reading. Either way the request that
                 # triggered this must not suffer for it — the database write
-                # has happened and the response is owed. The client recovers
-                # by reconnecting and re-reading /sessions/active.
+                # has happened and the response is owed.
                 logger.debug("dropping unresponsive websocket for user %s", user_id)
+                # Closed, not just deregistered. The client recovers by
+                # reconnecting and re-reading /sessions/active, and onclose is
+                # the only thing that triggers that — there is no heartbeat.
+                # Deregistering alone leaves the handler parked in receive(),
+                # so the socket stays open, the client never learns it has been
+                # unsubscribed, and it shows a connected socket and a frozen
+                # timer until the access token expires.
+                try:
+                    await asyncio.wait_for(
+                        websocket.close(code=1011), timeout=SEND_TIMEOUT_SECONDS
+                    )
+                except (Exception, asyncio.TimeoutError):
+                    # A socket too broken to close is still one to forget.
+                    pass
                 await self.disconnect(user_id, websocket)
 
     def connection_count(self, user_id: UUID) -> int:

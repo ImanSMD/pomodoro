@@ -100,6 +100,20 @@ it; nothing in phases 1–3 does.
 Run migrations as an explicit step (`docker compose run --rm api alembic upgrade head`), not on
 app startup — startup migrations race when more than one worker boots.
 
+**Keep the `/ws` access token out of the access log.** Uvicorn logs the request line, so every
+WebSocket connect writes `"WebSocket /ws?token=eyJ..."` — a live bearer credential, in plaintext,
+verbatim (confirmed at phase 1's exit gate). On a loopback dev box the exposure is bounded by the
+access token's few minutes; once logs are shipped to an aggregator it is not. Two ways out, and this
+is the section that owns the choice:
+
+- **Redact it** in the production logging config — a filter on `uvicorn.access` that strips the query
+  string. Cheap, no protocol change, and it also covers anything else that ever lands in a query.
+- **Move the token off the URL** — `Sec-WebSocket-Protocol` (a browser *can* set subprotocols) or a
+  single-use ticket fetched over HTTP first. Strictly better, but it changes `main.py`'s `/ws` handler
+  and `frontend/src/features/realtime/sessionSocket.ts` together, which is why phase 1 did not do it.
+
+Do the redaction at minimum; it is a few lines and it is in the logging config either way.
+
 Document a `pg_dump` backup one-liner in the README. Postgres in a container with no backup is the
 same trap as an ungitignored CSV.
 
@@ -159,6 +173,8 @@ same trap as an ungitignored CSV.
 - [ ] `compose.prod.yaml` with healthchecks, restart policies, no published DB port
 - [ ] Real `JWT_SECRET`, `Secure` cookie
 - [ ] Migrations as an explicit step, not on startup
+- [ ] Redact the query string from the `uvicorn.access` log (the `/ws` token)
+- [ ] Rate-limit `/api/auth/login`
 - [ ] README: deploy steps + `pg_dump` backup
 
 **Tests**

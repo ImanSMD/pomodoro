@@ -99,24 +99,31 @@ class Settings(BaseSettings):
         return self.jwt_secret == DEV_JWT_SECRET
 
     @property
+    def has_public_origin(self) -> bool:
+        """True when a browser somewhere other than this machine is allowed in.
+
+        Reads the RESOLVED origins, so it is only meaningful once _validate has
+        set them.
+        """
+        return any(not _is_loopback(o) for o in self._allowed_origins)
+
+    @property
     def looks_deployed(self) -> bool:
         """True when this config is not obviously a local dev box.
 
         Either signal alone is enough: a real secret means someone configured
         this deliberately, and Secure cookies only work over HTTPS.
+
+        has_public_origin is deliberately NOT a third signal here. The
+        dev-secret guard in _validate refuses that combination outright and
+        runs first, so by the time the checks that read this property run,
+        either cookie_secure is on or the secret is real — a third clause would
+        be unreachable, and a later reader would trust it.
         """
         return self.cookie_secure or not self.uses_dev_secret
 
     @model_validator(mode="after")
     def _validate(self) -> Settings:
-        if self.uses_dev_secret and self.cookie_secure:
-            raise ValueError(
-                "JWT_SECRET is still the development placeholder while "
-                "COOKIE_SECURE is on. Refresh tokens live for "
-                f"{self.refresh_token_ttl_days} days and would be signed with a "
-                "value committed to the repo. Generate one: openssl rand -hex 32"
-            )
-
         origins = [o.strip() for o in self.cors_origins.split(",") if o.strip()]
 
         normalised: list[str] = []
@@ -200,6 +207,30 @@ class Settings(BaseSettings):
             )
             origins = [DEFAULT_CORS_ORIGINS]
 
+        # Set before the guards below run: looks_deployed reads the resolved
+        # origins. Deliberately after the empty-origins fallback, so falling
+        # back to a loopback default cannot itself be read as a deployment.
+        self._allowed_origins = origins
+
+        if self.uses_dev_secret and self.cookie_secure:
+            raise ValueError(
+                "JWT_SECRET is still the development placeholder while "
+                "COOKIE_SECURE is on. Refresh tokens live for "
+                f"{self.refresh_token_ttl_days} days and would be signed with a "
+                "value committed to the repo. Generate one: openssl rand -hex 32"
+            )
+
+        if self.uses_dev_secret and self.has_public_origin:
+            public = sorted(o for o in origins if not _is_loopback(o))
+            raise ValueError(
+                f"CORS_ORIGINS allows the non-loopback origin(s) {public} while "
+                "JWT_SECRET is still the development placeholder. Access tokens "
+                "would be signed with a value committed to this repository, so "
+                "anyone could mint one for any user. Generate a secret "
+                "(openssl rand -hex 32) and set COOKIE_SECURE=true, or use a "
+                "loopback origin for local development."
+            )
+
         # Checked against the RESOLVED origins, not against emptiness. compose
         # ships CORS_ORIGINS=http://localhost:5173 as a default, so cors_origins
         # is never empty in a compose deployment and an emptiness-only check
@@ -230,7 +261,6 @@ class Settings(BaseSettings):
                 "otherwise be transmitted in clear text."
             )
 
-        self._allowed_origins = origins
         return self
 
 

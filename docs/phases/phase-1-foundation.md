@@ -80,6 +80,31 @@ users   id, email CITEXT UNIQUE NOT NULL, password_hash, display_name,
         created_at, updated_at
 ```
 
+### As built — the third deployment signal
+
+`looks_deployed` started as `cookie_secure or not uses_dev_secret`, and the exit gate's security
+review found the hole: those are the two things a rushed deploy forgets *together*. A deployment
+that set `CORS_ORIGINS` to its real front end and neither of the others tripped no guard at all and
+ran on `dev-only-insecure-secret-change-me` — a secret in this repository, with which anyone can mint
+an access token for any user id.
+
+So `_validate` now refuses the dev secret whenever a non-loopback origin is allowed, via a
+`has_public_origin` property. Two things about the shape of that fix:
+
+- It is a **dedicated guard, not a third clause on `looks_deployed`.** Adding it there was tried and
+  reverted: removing the clause again failed no test, because the dedicated guard runs first and the
+  three checks that read `looks_deployed` can therefore never see a public origin as the only
+  signal. The clause was unreachable, and an unreachable clause in a security guard is worse than no
+  clause — a later reader trusts it.
+- It takes no workflow away. A public origin against a local API never worked: the refresh cookie is
+  `SameSite=Lax`, so a front end on another site never sends it — the constraint `.env.example`
+  already spells out.
+
+Consequently `tests/test_config.py` has two factories: `make()` is a dev config (placeholder secret,
+loopback origin) and `deployed()` is a real secret with Secure cookies and a public origin. Origin
+*shape* tests pick whichever matches the host they use, since the guards refuse the mismatched
+pairings.
+
 ---
 
 ## 1.3 Auth
@@ -126,6 +151,23 @@ Rotate the refresh token on every use.
 
 Login failures return a single generic 401 for both "no such email" and "wrong password", so the
 endpoint can't be used to enumerate which emails are registered.
+
+### As built — two accepted exposures, so they are decisions rather than accidents
+
+**`POST /api/auth/register` answers 409 "An account with that email already exists",** which
+re-enables exactly the account enumeration `login()` goes to some trouble to prevent (the dummy
+argon2 verify, the single generic 401). Kept, because the alternative is to accept the registration,
+send nothing, and report success — which needs email delivery and a verification flow that does not
+exist in any phase of this plan, and which silently swallows a real user's typo'd second signup.
+Revisit if email verification is ever added.
+
+**The `/ws` access token is written into the uvicorn access log** — `"WebSocket /ws?token=eyJ..."`,
+verbatim, on every connect, confirmed at the exit gate. A browser cannot set headers on a WebSocket
+handshake, so the token has to travel in the URL; it is an access token (minutes), not the refresh
+cookie. This is bounded on a loopback dev box and is *not* bounded once logs are shipped anywhere,
+so **phase 4 owns it**: either redact the query string in the production logging config, or move the
+token onto `Sec-WebSocket-Protocol` / a single-use ticket, which is a protocol change on both sides
+and therefore not a phase-1 edit.
 
 ---
 

@@ -17,15 +17,32 @@ REAL_SECRET = "0" * 64
 
 
 def make(**overrides) -> Settings:
-    # Every field the guards read is passed explicitly: init kwargs outrank the
-    # environment, so the container's own env cannot make these tests flaky.
+    # A local dev config: placeholder secret, no Secure cookies, a loopback
+    # origin. Every field the guards read is passed explicitly, because init
+    # kwargs outrank the environment and the container's own env would
+    # otherwise make these tests flaky.
     base = {
         "database_url": "postgresql+asyncpg://u:p@db:5432/x",
         "jwt_secret": DEV_JWT_SECRET,
         "cookie_secure": False,
-        "cors_origins": "https://app.example.com",
+        "cors_origins": DEFAULT_CORS_ORIGINS,
     }
     return Settings(**{**base, **overrides})
+
+
+def deployed(**overrides) -> Settings:
+    """A config the guards treat as a deployment.
+
+    All three of a real secret, Secure cookies and a non-loopback origin, since
+    each one on its own is a deployment signal and the guards refuse the
+    mismatched combinations.
+    """
+    base = {
+        "jwt_secret": REAL_SECRET,
+        "cookie_secure": True,
+        "cors_origins": "https://app.example.com",
+    }
+    return make(**{**base, **overrides})
 
 
 def test_dev_secret_with_secure_cookie_is_refused():
@@ -34,7 +51,7 @@ def test_dev_secret_with_secure_cookie_is_refused():
 
 
 def test_real_secret_with_secure_cookie_is_fine():
-    assert make(jwt_secret=REAL_SECRET, cookie_secure=True).cookie_secure
+    assert deployed().cookie_secure
 
 
 @pytest.mark.parametrize("value", ["*", "https://a.example,*", " * "])
@@ -67,7 +84,7 @@ def test_empty_origins_are_refused_on_a_deployed_config(overrides):
 
 
 def test_explicit_origins_are_preserved_and_trimmed():
-    settings = make(cors_origins=" https://a.example , https://b.example ")
+    settings = deployed(cors_origins=" https://a.example , https://b.example ")
     assert settings.allowed_origins == ["https://a.example", "https://b.example"]
 
 
@@ -76,7 +93,7 @@ def test_an_allowed_origins_env_var_cannot_break_startup(monkeypatch):
     # be read from the environment and JSON-parsed, so a stray ALLOWED_ORIGINS
     # would crash the app before it served a request.
     monkeypatch.setenv("ALLOWED_ORIGINS", "https://evil.example")
-    assert make().allowed_origins == ["https://app.example.com"]
+    assert make().allowed_origins == [DEFAULT_CORS_ORIGINS]
 
 
 @pytest.mark.parametrize(
@@ -99,25 +116,31 @@ def test_malformed_origin_is_refused(value: str):
 
 
 @pytest.mark.parametrize(
-    "value",
-    ["http://localhost:5173", "https://app.example.com", "http://127.0.0.1:8000"],
+    ("factory", "value"),
+    [
+        (make, "http://localhost:5173"),
+        (make, "http://127.0.0.1:8000"),
+        (deployed, "https://app.example.com"),
+    ],
 )
-def test_well_formed_origins_are_accepted(value: str):
-    assert make(cors_origins=value).allowed_origins == [value]
+def test_well_formed_origins_are_accepted(factory, value: str):
+    # Loopback belongs to a dev config and a public host to a deployed one;
+    # each pairing the other way round is refused by a guard below.
+    assert factory(cors_origins=value).allowed_origins == [value]
 
 
 @pytest.mark.parametrize(
-    ("value", "expected"),
+    ("factory", "value", "expected"),
     [
-        ("https://App.Example.com", "https://app.example.com"),
-        ("HTTPS://app.example.com", "https://app.example.com"),
-        ("http://LOCALHOST:5173", "http://localhost:5173"),
+        (deployed, "https://App.Example.com", "https://app.example.com"),
+        (deployed, "HTTPS://app.example.com", "https://app.example.com"),
+        (make, "http://LOCALHOST:5173", "http://localhost:5173"),
     ],
 )
-def test_origins_are_lowercased(value: str, expected: str):
+def test_origins_are_lowercased(factory, value: str, expected: str):
     # Starlette compares allow_origins to the Origin header with a plain `in`,
     # and browsers always send scheme and host lowercased.
-    assert make(cors_origins=value).allowed_origins == [expected]
+    assert factory(cors_origins=value).allowed_origins == [expected]
 
 
 def test_origin_with_credentials_is_refused():
@@ -179,7 +202,7 @@ def test_origins_starlette_can_never_match_are_refused(value: str):
 def test_default_ports_are_stripped(value: str, expected: str):
     # A browser omits the default port from Origin, so keeping it would mean
     # the entry never matches.
-    assert make(cors_origins=value).allowed_origins == [expected]
+    assert deployed(cors_origins=value).allowed_origins == [expected]
 
 
 def test_short_jwt_secret_is_refused():
@@ -204,17 +227,17 @@ def test_non_positive_token_ttls_are_refused(overrides):
 
 
 @pytest.mark.parametrize(
-    ("value", "expected"),
+    ("factory", "value", "expected"),
     [
-        ("https://[::1]:8000", "https://[::1]:8000"),
-        ("http://[2001:db8::1]", "http://[2001:db8::1]"),
-        ("https://[2001:DB8::1]:443", "https://[2001:db8::1]"),
+        (make, "https://[::1]:8000", "https://[::1]:8000"),
+        (deployed, "http://[2001:db8::1]", "http://[2001:db8::1]"),
+        (deployed, "https://[2001:DB8::1]:443", "https://[2001:db8::1]"),
     ],
 )
-def test_ipv6_origins_keep_their_brackets(value: str, expected: str):
+def test_ipv6_origins_keep_their_brackets(factory, value: str, expected: str):
     # urlparse strips the brackets from .hostname, and a browser sends them —
     # so the unbracketed form matches nothing AND slips past the loopback guard.
-    assert make(cors_origins=value).allowed_origins == [expected]
+    assert factory(cors_origins=value).allowed_origins == [expected]
 
 
 def test_ipv6_loopback_is_caught_on_a_deployed_config():
@@ -269,15 +292,51 @@ def test_a_deployed_config_must_use_secure_cookies():
     anyone on the network path can take it.
     """
     with pytest.raises(ValidationError, match="COOKIE_SECURE must be on"):
-        make(jwt_secret=REAL_SECRET, cookie_secure=False)
+        make(
+            jwt_secret=REAL_SECRET,
+            cookie_secure=False,
+            cors_origins="https://app.example.com",
+        )
 
 
 def test_a_deployed_config_with_secure_cookies_is_accepted():
-    settings = make(jwt_secret=REAL_SECRET, cookie_secure=True)
-    assert settings.cookie_secure is True
+    assert deployed().cookie_secure is True
 
 
 def test_a_dev_config_does_not_require_secure_cookies():
     # Local development is served over http, where Secure cookies would never
     # be sent at all.
-    assert make(cookie_secure=False).allowed_origins == ["https://app.example.com"]
+    assert make(cookie_secure=False).allowed_origins == [DEFAULT_CORS_ORIGINS]
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "https://app.example.com",
+        "http://app.example.com",
+        f"{DEFAULT_CORS_ORIGINS},https://app.example.com",
+    ],
+    ids=["https", "http", "alongside-a-loopback-origin"],
+)
+def test_the_dev_secret_is_refused_with_a_public_origin(value: str):
+    """The signal the other two guards cannot see.
+
+    A real JWT_SECRET and COOKIE_SECURE are the two things a rushed deploy
+    forgets together, so a deployment that set only CORS_ORIGINS to its real
+    front end tripped nothing and ran on the secret in this repository — where
+    anyone could mint an access token for any user id. A non-loopback origin is
+    the third signal, and it is the one such a deployment always sets.
+    """
+    with pytest.raises(ValidationError, match="non-loopback origin"):
+        make(cors_origins=value)
+
+
+def test_a_public_origin_is_not_a_deployment_signal_when_it_is_the_fallback():
+    # The empty-origins fallback is a loopback default, so falling back must not
+    # be read as a deployment and refuse to start a dev box.
+    assert make(cors_origins="").allowed_origins == [DEFAULT_CORS_ORIGINS]
+
+
+def test_has_public_origin_reports_the_resolved_origins():
+    assert deployed().has_public_origin is True
+    assert make().has_public_origin is False

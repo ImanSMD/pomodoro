@@ -323,10 +323,13 @@ Standing, with reasons:
   session running against a task no list shows. Finish or discard first.
 - **Long-overdue sessions are not claimed silently.** The client auto-claims only within
   `OVERDUE_CLAIM_LIMIT_MS` (15 min) of the end — the throttled or briefly asleep tab the brief
-  describes. Beyond that the timer asks: record the planned minutes (fix-end with
-  `duration_minutes`), record everything, or discard. Since 1.6 the server enforces its own,
-  looser bound (`COMPLETE_GRACE`, 1 hour), so the client policy is now defence in depth rather
-  than the only guard.
+  describes. Beyond that the timer asks: record the planned minutes, record everything, or
+  discard. Since 1.6 the server enforces its own, looser bound (`COMPLETE_GRACE`, 1 hour), so the
+  client policy is now defence in depth rather than the only guard — and both "record" choices go
+  through fix-end (`duration_minutes`), never `/complete`, which refuses a session that far past
+  its end. "Record everything" sends the whole span, measured on the server's clock at the click.
+  A delete or archive refused with the new 409 re-reads the active session, so a tab that had not
+  yet heard of a session started elsewhere shows it.
 - **The running task cannot be removed, now on both sides.** The list disables Archive, Delete
   and Done on the running task; since 1.6 the API also returns 409 from `DELETE /tasks/{id}` and
   `/archive` while a session runs, so a second device a few seconds behind cannot leave a session
@@ -380,7 +383,7 @@ Standing, with reasons:
 - **Settling an overdue session re-reads `/sessions/active` first.** Fix-end, unlike complete,
   rewrites a completed session, and the overdue screen can be stale after sleep.
 - **"Record all" on an overdue session is offered only up to 24 hours**, the `MAX_SESSION_MINUTES`
-  fix-end enforces — `/complete` does not, so past it the choice would store an impossible session.
+  that fix-end — which it goes through — enforces.
 - **A running session whose task this tab has never loaded** (started elsewhere while this tab's
   socket was down) triggers one refetch of the task list, so the timer can name it.
 - Checked and not changed: dialogs opened from dropdown items (Edit, Delete) — focus lands in the

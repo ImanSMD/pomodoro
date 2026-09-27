@@ -161,3 +161,44 @@ describe('the running task', () => {
     expect(del.getAttribute('aria-disabled')).toBeNull()
   })
 })
+
+describe('a delete the server refuses', () => {
+  it('re-reads the active session: another device started one on this task', async () => {
+    let activeReads = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const u = String(url)
+        if (u.includes('/api/categories')) return Response.json([category])
+        if (u.includes('/api/tasks') && init?.method === 'DELETE') {
+          return Response.json({ detail: 'A session is running on this task. Finish or cancel it first.' }, { status: 409 })
+        }
+        if (u.includes('/api/tasks')) return Response.json([task('t1', 'Draft outline')])
+        if (u.includes('/api/sessions/active')) {
+          activeReads += 1
+          return Response.json({ session: null, server_now: '2026-09-25T10:01:00Z' })
+        }
+        return Response.json([])
+      }),
+    )
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={['/c/c1']}>
+          <Routes>
+            <Route path="/c/:categoryId" element={<TaskListPage />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+    await screen.findByText('Draft outline')
+    await vi.waitFor(() => expect(activeReads).toBe(1))
+
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Draft outline options' }), { key: 'Enter' })
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Delete/ }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete task' }))
+
+    await vi.waitFor(() => expect(activeReads).toBe(2))
+  })
+})
+

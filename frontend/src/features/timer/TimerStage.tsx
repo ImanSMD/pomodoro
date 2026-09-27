@@ -147,8 +147,8 @@ function Running({ session, remaining }: { session: Session; remaining: number }
  * count the whole gap as focus, so the user decides what it was.
  */
 // Mirrors MAX_SESSION_MINUTES in backend/app/schemas/session.py, which
-// fix-end enforces. /complete does not, so "record all" must not be offered
-// past it: it would store more than any session is allowed to be.
+// fix-end enforces. "Record all" goes through fix-end, so past it there is
+// nothing it could record.
 const MAX_SESSION_SECONDS = 24 * 60 * 60
 
 function OverdueSession({ session, overdueMs }: { session: Session; overdueMs: number }) {
@@ -163,11 +163,28 @@ function OverdueSession({ session, overdueMs }: { session: Session; overdueMs: n
   // rewrite a session that is already completed. So confirm it is still this
   // one, still running, before settling it; if not, the refetch shows what
   // actually happened.
-  const settle = async (vars: EndAction) => {
+  //
+  // Everything here goes through fix-end or cancel, never /complete: the
+  // server refuses to complete a session this far past its end
+  // (COMPLETE_GRACE), since the elapsed time is no longer evidence of work.
+  // "Record all" says so explicitly instead — the whole span, measured on the
+  // server's clock at the moment of the click.
+  const settle = async (choice: 'planned' | 'all' | 'discard') => {
     setChecking(true)
     try {
       const current = await readActiveSessionFresh(queryClient)
-      if (current.session?.id === session.id) end.run(vars)
+      if (current.session?.id !== session.id) return
+      const vars: EndAction =
+        choice === 'planned'
+          ? { sessionId: session.id, action: 'record', minutes: session.planned_minutes }
+          : choice === 'all'
+            ? {
+                sessionId: session.id,
+                action: 'record',
+                minutes: (Date.now() + current.offsetMs - Date.parse(session.started_at)) / 60_000,
+              }
+            : { sessionId: session.id, action: 'cancel' }
+      end.run(vars)
     } catch (error) {
       toastError('Couldn’t update the session')(error)
     } finally {
@@ -190,7 +207,7 @@ function OverdueSession({ session, overdueMs }: { session: Session; overdueMs: n
         <Button
           className="h-11 px-5"
           disabled={busy}
-          onClick={() => settle({ sessionId: session.id, action: 'record', minutes: session.planned_minutes })}
+          onClick={() => settle('planned')}
         >
           Record {session.planned_minutes} minutes
         </Button>
@@ -199,7 +216,7 @@ function OverdueSession({ session, overdueMs }: { session: Session; overdueMs: n
             variant="outline"
             className="h-11 px-5"
             disabled={busy}
-            onClick={() => settle({ sessionId: session.id, action: 'complete' })}
+            onClick={() => settle('all')}
           >
             Record all {formatDuration(elapsedSeconds)}
           </Button>
@@ -208,7 +225,7 @@ function OverdueSession({ session, overdueMs }: { session: Session; overdueMs: n
           variant="ghost"
           className="h-11 px-5"
           disabled={busy}
-          onClick={() => settle({ sessionId: session.id, action: 'cancel' })}
+          onClick={() => settle('discard')}
         >
           Discard
         </Button>

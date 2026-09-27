@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
-import { api } from '@/api/client'
+import { api, ApiError } from '@/api/client'
 import type { Task } from '@/api/types'
 import { removeById, upsertById } from '@/lib/listCache'
 
@@ -58,6 +58,13 @@ export function useTaskAction() {
         action.type === 'delete' ? removeById(list, action.id) : upsertById(list, task),
       )
       void queryClient.invalidateQueries({ queryKey: tasksKey })
+    },
+    onError: (error) => {
+      // 409 from delete/archive: a session is running on the task, started
+      // somewhere this tab has not heard about yet. Show it.
+      if (error instanceof ApiError && error.status === 409) {
+        void queryClient.invalidateQueries({ queryKey: ['session', 'active'] })
+      }
     },
   })
 }

@@ -94,4 +94,18 @@ describe('TimerStage', () => {
     expect(await screen.findByRole('button', { name: /Record all/ })).toBeTruthy()
     vi.useRealTimers()
   })
+
+  it('records all of it through fix-end — /complete refuses a session this far past its end', async () => {
+    vi.useFakeTimers({ now: NOW, shouldAdvanceTime: true })
+    // Nine hours in, on a 25-minute plan: well past the server's COMPLETE_GRACE.
+    const { fetchMock } = renderStage(session(9 * 60), [[task]])
+    fireEvent.click(await screen.findByRole('button', { name: /Record all/ }))
+
+    await vi.waitFor(() => expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'PATCH')).toBe(true))
+    const [url, init] = fetchMock.mock.calls.find(([, init]) => init?.method === 'PATCH')!
+    expect(url).toMatch(/\/api\/sessions\/s1$/)
+    // Nine hours, as minutes, measured on the server's clock.
+    expect(JSON.parse(String(init?.body)).duration_minutes).toBeCloseTo(9 * 60, 0)
+    expect(fetchMock.mock.calls.some(([u]) => String(u).endsWith('/complete'))).toBe(false)
+  })
 })

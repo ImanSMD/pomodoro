@@ -162,6 +162,18 @@ PATCH  /api/tasks/reorder              {ids: [...]}  → rewrites position
 
 A missing or other-user row returns **404, never 403** — a 403 confirms the id exists.
 
+### As built
+
+**There is no single-row `GET /api/categories/{id}` or `GET /api/tasks/{id}`,** and that is not an
+oversight — neither the list above nor anything in 1.6 asks for one. The frontend reads
+`/api/tasks?include_archived=true` once and finds rows in that cache (`lib/listCache.ts`), so a
+detail read would be a second source of truth for data already in hand. Hitting one returns **405**,
+which looks like a bug when you are walking the API by hand; it is a missing route, not a broken
+one. Phase 2's real task-detail page is where to add it if it needs data the list does not carry.
+
+The 404-never-403 rule is covered across *every* route that takes an id, not just a read path — see
+the parametrised cases in `test_scoping.py`.
+
 ---
 
 ## 1.5 Sessions and the WebSocket

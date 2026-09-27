@@ -504,14 +504,25 @@ concurrency untestable — `SELECT … FOR UPDATE` never blocks against its own 
 
 ## Definition of done
 
-- [ ] `docker compose up --build` brings up db + api + web from a clean volume
-- [ ] `alembic upgrade head` applies 0001–0004 cleanly
-- [ ] Register → create category → create task → start timer
+- [x] `docker compose up --build` brings up db + api + web from a clean volume
+- [x] `alembic upgrade head` applies 0001–0004 cleanly
+- [x] Register → create category → create task → start timer
 - [ ] **Hard-refresh mid-session:** countdown resumes at the correct second
 - [ ] **Second tab:** completing in one updates the other within a second
 - [ ] **Double-start:** the second returns 409 and the UI shows the running session
-- [ ] `pytest` green, including the concurrent-start and cross-user tests
-- [ ] `CLAUDE.md` describes the new stack
+- [x] `pytest` green, including the concurrent-start and cross-user tests
+- [x] `CLAUDE.md` describes the new stack
+
+The three unticked items are the ones that can only be answered by a person looking at a browser,
+and the Claude-in-Chrome extension could not inject on this machine (screenshots and `read_page` both
+time out — on `/api/health` too, so it is the extension and not this app's bundle). What *was*
+verified, over real HTTP and real WebSockets against the running stack rather than the ASGI
+transport: `/sessions/active` returns the running session with a `server_now` consistent with
+`started_at`; two live sockets each received `session.started` and then `session.completed`; a second
+`start` is 409 and a `DELETE` during a run is 409. The rendering half — that the countdown resumes at
+the right *second* on screen, and that the UI shows the running session behind the 409 — is what the
+hand pass still owes. `frontend/src/features/timer/` has unit coverage of the recompute-from-
+`started_at` logic, which is the part that would be wrong.
 
 ---
 
